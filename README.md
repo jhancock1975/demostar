@@ -51,6 +51,8 @@ https://jhancock1975.github.io/demostar/
    - Audio reply model: optional; set this to an OpenRouter model that supports audio output if you want model-generated speech
 4. Tap `Prime sensors`, grant browser permissions, then tap `Fuse context`.
 
+The model dropdowns are populated from OpenRouter's `/api/v1/models` endpoint on page load and filtered by each component's modality needs.
+
 The API key is kept only in page memory. It is not written to `localStorage`, `sessionStorage`, cookies, IndexedDB, or the service worker cache, so the user must enter it again after every reload or new tab. For production, put OpenRouter behind a server-side proxy instead of calling it from the browser.
 
 ## Supporting Files

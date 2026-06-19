@@ -58,16 +58,25 @@
             <p class="hint">Kept only in page memory. Reloading or closing the tab clears it. Without a key, the app runs a local fusion preview.</p>
 
             <label for="vlmModelInput">Vision model</label>
-            <input id="vlmModelInput" type="text" value="google/gemini-2.5-flash">
+            <select id="vlmModelInput">
+              <option value="google/gemini-2.5-flash">Google: Gemini 2.5 Flash</option>
+            </select>
 
             <label for="sttModelInput">Speech model</label>
-            <input id="sttModelInput" type="text" value="openai/whisper-1">
+            <select id="sttModelInput">
+              <option value="openai/whisper-1">OpenAI: Whisper 1</option>
+            </select>
 
             <label for="audioModelInput">Audio reasoning model</label>
-            <input id="audioModelInput" type="text" value="google/gemini-2.5-flash">
+            <select id="audioModelInput">
+              <option value="google/gemini-2.5-flash">Google: Gemini 2.5 Flash</option>
+            </select>
 
             <label for="audioVoiceModelInput">Audio reply model</label>
-            <input id="audioVoiceModelInput" type="text" placeholder="Optional model with audio output">
+            <select id="audioVoiceModelInput">
+              <option value="">Browser speech fallback</option>
+            </select>
+            <p class="hint" id="modelStatus">Loading OpenRouter model list...</p>
           </div>
 
           <div class="panel-section">

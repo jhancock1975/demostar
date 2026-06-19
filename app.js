@@ -1,5 +1,31 @@
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const APP_TITLE = "Demostar Sensorium";
+const FALLBACK_MODELS = [
+  {
+    id: "google/gemini-2.5-flash",
+    name: "Google: Gemini 2.5 Flash",
+    architecture: {
+      input_modalities: ["text", "image", "audio"],
+      output_modalities: ["text"]
+    }
+  },
+  {
+    id: "openai/gpt-audio-mini",
+    name: "OpenAI: GPT Audio Mini",
+    architecture: {
+      input_modalities: ["text", "audio"],
+      output_modalities: ["text", "audio"]
+    }
+  },
+  {
+    id: "mistralai/voxtral-small-24b-2507",
+    name: "Mistral: Voxtral Small 24B 2507",
+    architecture: {
+      input_modalities: ["text", "audio"],
+      output_modalities: ["text"]
+    }
+  }
+];
 
 const state = {
   apiKey: "",
@@ -30,6 +56,8 @@ const state = {
   latestResult: "",
   latestAudioInsight: "",
   generatedVoiceUrl: "",
+  modelCatalog: [],
+  modelCatalogLoaded: false,
   supported: {}
 };
 
@@ -53,6 +81,7 @@ function bindElements() {
     "sttModelInput",
     "audioModelInput",
     "audioVoiceModelInput",
+    "modelStatus",
     "clearKeyBtn",
     "missionInput",
     "sampleMissionBtn",
@@ -123,19 +152,22 @@ function wireEvents() {
     state.apiKey = event.target.value.trim();
     renderCapabilities();
   });
-  els.vlmModelInput.addEventListener("input", (event) => {
+  els.vlmModelInput.addEventListener("change", (event) => {
     state.vlmModel = event.target.value.trim() || "google/gemini-2.5-flash";
     sessionStorage.setItem("openrouter-vlm-model", state.vlmModel);
+    renderCapabilities();
   });
-  els.sttModelInput.addEventListener("input", (event) => {
+  els.sttModelInput.addEventListener("change", (event) => {
     state.sttModel = event.target.value.trim() || "openai/whisper-1";
     sessionStorage.setItem("openrouter-stt-model", state.sttModel);
+    renderCapabilities();
   });
-  els.audioModelInput.addEventListener("input", (event) => {
+  els.audioModelInput.addEventListener("change", (event) => {
     state.audioModel = event.target.value.trim() || "google/gemini-2.5-flash";
     sessionStorage.setItem("openrouter-audio-model", state.audioModel);
+    renderCapabilities();
   });
-  els.audioVoiceModelInput.addEventListener("input", (event) => {
+  els.audioVoiceModelInput.addEventListener("change", (event) => {
     state.audioVoiceModel = event.target.value.trim();
     if (state.audioVoiceModel) {
       sessionStorage.setItem("openrouter-audio-voice-model", state.audioVoiceModel);
@@ -165,6 +197,143 @@ function wireEvents() {
   els.shareBtn.addEventListener("click", shareResult);
   els.copyBtn.addEventListener("click", copyResult);
   wireGestureSurface();
+}
+
+async function loadOpenRouterModels() {
+  setModelStatus("Loading OpenRouter model list...");
+  try {
+    const response = await fetch(`${OPENROUTER_BASE}/models?output_modalities=all&sort=most-popular`, {
+      headers: {
+        "Accept": "application/json"
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`${response.status} ${await response.text()}`);
+    }
+    const payload = await response.json();
+    const models = Array.isArray(payload.data) ? payload.data : [];
+    if (!models.length) {
+      throw new Error("OpenRouter returned no models");
+    }
+    state.modelCatalog = normalizeModels(models);
+    state.modelCatalogLoaded = true;
+    populateModelSelectors();
+    setModelStatus(`${state.modelCatalog.length} OpenRouter models loaded`);
+    addEvent("models", `${state.modelCatalog.length} OpenRouter models loaded`);
+  } catch (error) {
+    state.modelCatalog = normalizeModels(FALLBACK_MODELS);
+    state.modelCatalogLoaded = false;
+    populateModelSelectors();
+    setModelStatus(`Using fallback model list: ${cleanError(error)}`);
+    addEvent("models", "OpenRouter model list unavailable; using fallbacks");
+  }
+  renderCapabilities();
+}
+
+function normalizeModels(models) {
+  const unique = new Map();
+  models.forEach((model) => {
+    if (!model?.id || unique.has(model.id)) return;
+    unique.set(model.id, {
+      ...model,
+      name: model.name || model.id,
+      architecture: {
+        ...(model.architecture || {}),
+        input_modalities: model.architecture?.input_modalities || [],
+        output_modalities: model.architecture?.output_modalities || []
+      }
+    });
+  });
+  return [...unique.values()].sort((a, b) => modelLabel(a).localeCompare(modelLabel(b)));
+}
+
+function populateModelSelectors() {
+  const visionModels = filterModels({
+    inputAny: ["image"],
+    outputAny: ["text"]
+  });
+  const speechModels = filterModels({
+    inputAny: ["audio"],
+    outputAny: ["text"]
+  });
+  const audioReasoningModels = filterModels({
+    inputAny: ["audio"],
+    outputAny: ["text"]
+  });
+  const audioReplyModels = filterModels({
+    outputAny: ["audio"]
+  });
+
+  populateModelSelect(els.vlmModelInput, visionModels, state.vlmModel, {
+    pinnedModels: [modelById(state.vlmModel), modelById("google/gemini-2.5-flash")]
+  });
+  populateModelSelect(els.sttModelInput, speechModels, state.sttModel, {
+    pinnedModels: [
+      {
+        id: "openai/whisper-1",
+        name: "OpenAI: Whisper 1",
+        architecture: { input_modalities: ["audio"], output_modalities: ["text"] }
+      },
+      modelById(state.sttModel)
+    ]
+  });
+  populateModelSelect(els.audioModelInput, audioReasoningModels, state.audioModel, {
+    pinnedModels: [modelById(state.audioModel), modelById("google/gemini-2.5-flash")]
+  });
+  populateModelSelect(els.audioVoiceModelInput, audioReplyModels, state.audioVoiceModel, {
+    emptyLabel: "Browser speech fallback",
+    pinnedModels: [modelById(state.audioVoiceModel), modelById("openai/gpt-audio-mini")]
+  });
+}
+
+function filterModels({ inputAny = [], outputAny = [] }) {
+  return state.modelCatalog.filter((model) => {
+    const inputs = model.architecture.input_modalities || [];
+    const outputs = model.architecture.output_modalities || [];
+    const inputMatches = !inputAny.length || inputAny.some((modality) => inputs.includes(modality));
+    const outputMatches = !outputAny.length || outputAny.some((modality) => outputs.includes(modality));
+    return inputMatches && outputMatches;
+  });
+}
+
+function populateModelSelect(select, models, currentValue, options = {}) {
+  const pinned = (options.pinnedModels || []).filter(Boolean);
+  const merged = normalizeModels([...pinned, ...models]);
+  const selectedValue = currentValue || "";
+  const choices = [];
+
+  if (options.emptyLabel) {
+    choices.push(`<option value="">${escapeHtml(options.emptyLabel)}</option>`);
+  }
+  if (selectedValue && !merged.some((model) => model.id === selectedValue)) {
+    choices.push(`<option value="${escapeHtml(selectedValue)}">${escapeHtml(selectedValue)} (custom)</option>`);
+  }
+  choices.push(...merged.map((model) => (
+    `<option value="${escapeHtml(model.id)}">${escapeHtml(modelLabel(model))}</option>`
+  )));
+
+  select.innerHTML = choices.join("");
+  select.value = selectedValue;
+  if (selectedValue && select.value !== selectedValue) {
+    select.value = "";
+  }
+}
+
+function modelById(id) {
+  if (!id) return null;
+  return state.modelCatalog.find((model) => model.id === id)
+    || FALLBACK_MODELS.find((model) => model.id === id)
+    || null;
+}
+
+function modelLabel(model) {
+  return `${model.name || model.id} - ${model.id}`;
+}
+
+function setModelStatus(text) {
+  if (els.modelStatus) {
+    els.modelStatus.textContent = text;
+  }
 }
 
 function wireGestureSurface() {
@@ -843,6 +1012,7 @@ function addEvent(type, text) {
 function renderCapabilities() {
   const items = [
     ["OpenRouter", state.apiKey ? "Ready" : "Local preview", state.apiKey ? "ok" : "warn"],
+    ["Models", state.modelCatalogLoaded ? `${state.modelCatalog.length} loaded` : "Fallback list", state.modelCatalogLoaded ? "ok" : "warn"],
     ["Audio model", state.apiKey ? state.audioModel : "Needs key", state.apiKey ? "ok" : "warn"],
     ["Voice model", state.audioVoiceModel || "Browser speech", state.audioVoiceModel ? "ok" : "warn"],
     ["Camera", state.videoStream ? "Active" : supportLabel("camera"), state.videoStream ? "ok" : state.supported.camera ? "warn" : "off"],
@@ -1158,10 +1328,12 @@ function init() {
   detectSupport();
   restoreSettings();
   wireEvents();
+  populateModelSelectors();
   renderCapabilities();
   renderMetrics();
   renderEvents();
   registerServiceWorker();
+  loadOpenRouterModels();
   addEvent("ready", window.isSecureContext ? "Secure browser context" : "Use HTTPS for phone sensors");
 }
 
