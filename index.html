@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0d0d">
+    <title>Demostar Sensorium</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Demostar</p>
+          <h1>Sensorium</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="icon-button" id="fullscreenBtn" type="button" aria-label="Fullscreen">FS</button>
+          <button class="icon-button" id="settingsBtn" type="button" aria-label="Settings">Key</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="stage" aria-label="Live phone sensor stage">
+          <video id="cameraPreview" autoplay playsinline muted></video>
+          <canvas id="snapshotCanvas" hidden></canvas>
+
+          <div class="camera-empty" id="cameraEmpty">
+            <strong>Sensorium is waiting for phone context.</strong>
+            <span>Prime sensors, point the camera, speak, move, tap, pinch, and swipe.</span>
+          </div>
+
+          <div class="gesture-surface" id="gestureSurface" aria-label="Gesture input surface">
+            <div class="reticle">
+              <span></span>
+              <span></span>
+            </div>
+            <div class="gesture-readout" id="gestureReadout">No gesture yet</div>
+          </div>
+
+          <div class="stage-controls">
+            <button class="primary-action" id="armBtn" type="button">Prime sensors</button>
+            <button id="analyzeBtn" type="button">Fuse context</button>
+            <button id="recordBtn" type="button">Record voice</button>
+          </div>
+        </section>
+
+        <section class="side-panel" aria-label="Control panel">
+          <div class="panel-section settings-panel" id="settingsPanel">
+            <div class="section-heading">
+              <h2>OpenRouter</h2>
+              <button class="text-button" id="clearKeyBtn" type="button">Clear</button>
+            </div>
+            <label for="apiKeyInput">API key</label>
+            <input id="apiKeyInput" type="password" inputmode="text" autocomplete="off" placeholder="sk-or-v1-...">
+            <p class="hint">Stored only in this browser session. Without a key, the app runs a local fusion preview.</p>
+
+            <label for="vlmModelInput">Vision model</label>
+            <input id="vlmModelInput" type="text" value="google/gemini-2.5-flash">
+
+            <label for="sttModelInput">Speech model</label>
+            <input id="sttModelInput" type="text" value="openai/whisper-1">
+
+            <label for="audioModelInput">Audio reasoning model</label>
+            <input id="audioModelInput" type="text" value="google/gemini-2.5-flash">
+
+            <label for="audioVoiceModelInput">Audio reply model</label>
+            <input id="audioVoiceModelInput" type="text" placeholder="Optional model with audio output">
+          </div>
+
+          <div class="panel-section">
+            <div class="section-heading">
+              <h2>Mission</h2>
+              <button class="text-button" id="sampleMissionBtn" type="button">Sample</button>
+            </div>
+            <textarea id="missionInput" rows="4" placeholder="What should the phone help you do right now?"></textarea>
+            <div class="mode-row" role="group" aria-label="Fusion mode">
+              <button class="mode-chip active" data-mode="guide" type="button">Guide</button>
+              <button class="mode-chip" data-mode="memory" type="button">Memory</button>
+              <button class="mode-chip" data-mode="safety" type="button">Safety</button>
+              <button class="mode-chip" data-mode="maker" type="button">Maker</button>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <div class="section-heading">
+              <h2>Signals</h2>
+              <span class="live-dot" id="busyDot" aria-label="Idle"></span>
+            </div>
+            <div class="capability-grid" id="capabilityGrid"></div>
+          </div>
+
+          <div class="panel-section">
+            <div class="section-heading">
+              <h2>Context braid</h2>
+              <button class="text-button" id="clearEventsBtn" type="button">Reset</button>
+            </div>
+            <div class="metric-grid">
+              <div>
+                <span>Location</span>
+                <strong id="locationMetric">Waiting</strong>
+              </div>
+              <div>
+                <span>Motion</span>
+                <strong id="motionMetric">Still</strong>
+              </div>
+              <div>
+                <span>Mic</span>
+                <strong id="micMetric">Off</strong>
+              </div>
+              <div>
+                <span>Gesture</span>
+                <strong id="gestureMetric">None</strong>
+              </div>
+            </div>
+            <div class="event-log" id="eventLog" aria-live="polite"></div>
+          </div>
+        </section>
+      </main>
+
+      <section class="result-panel" aria-label="Fusion result">
+        <div class="section-heading">
+          <h2>AI field card</h2>
+          <div class="result-actions">
+            <button class="text-button" id="speakBtn" type="button">Speak</button>
+            <button class="text-button" id="shareBtn" type="button">Share</button>
+            <button class="text-button" id="copyBtn" type="button">Copy</button>
+          </div>
+        </div>
+        <div class="result-body" id="resultBody">
+          Fuse context to create a phone-only answer from sight, sound, location, motion, and touch.
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

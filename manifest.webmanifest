@@ -1,0 +1,18 @@
+{
+  "name": "Demostar Sensorium",
+  "short_name": "Sensorium",
+  "description": "A mobile browser demo that fuses camera, mic, location, motion, gestures, and OpenRouter models.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0b0d0d",
+  "theme_color": "#0b0d0d",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
