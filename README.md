@@ -22,7 +22,15 @@ python3 -m http.server 8000
 
 Open `http://localhost:8000` on the same machine.
 
-Phone sensors such as camera, microphone, geolocation, and motion usually require HTTPS on mobile browsers. For a real phone demo, deploy this static app to an HTTPS host such as GitHub Pages, Netlify, Cloudflare Pages, or another trusted HTTPS origin.
+For a phone on the same private network, use HTTPS. Mobile browsers block camera, microphone, location, and motion APIs on a plain LAN `http://` origin.
+
+The included `server.py` helper can serve the app over local HTTPS once you provide a certificate and key:
+
+```bash
+python3 server.py --lan-ip 10.0.0.196 --cert /tmp/demostar-certs/demostar-server.pem --key /tmp/demostar-certs/demostar-server.key --cert-dir /tmp/demostar-certs
+```
+
+On iPhone, install and trust the local CA from `http://10.0.0.196:8001/demostar-ca.crt`, then open `https://10.0.0.196:8443/`.
 
 ## OpenRouter Setup
 
@@ -46,8 +54,8 @@ The API key is stored in `sessionStorage`, so it clears when the browser session
 | [app.js](app.js) | Sensor orchestration, gestures, OpenRouter calls, and result rendering. |
 | [manifest.webmanifest](manifest.webmanifest) | PWA metadata. |
 | [service-worker.js](service-worker.js) | Static asset cache for installable/offline behavior. |
+| [server.py](server.py) | Local LAN HTTPS server helper. |
 | [assets/icon.svg](assets/icon.svg) | App icon. |
-| [.github/workflows/pages.yml](.github/workflows/pages.yml) | GitHub Pages deployment workflow. |
 | [LICENSE](LICENSE) | Apache License 2.0 terms. |
 | [.gitignore](.gitignore) | Local file ignore rules for agents, IDEs, Python artifacts, and environment files. |
 
