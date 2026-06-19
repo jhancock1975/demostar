@@ -1,4 +1,4 @@
-const CACHE_NAME = "demostar-sensorium-v2";
+const CACHE_NAME = "demostar-sensorium-v3";
 const ASSETS = [
   "./",
   "./index.html",

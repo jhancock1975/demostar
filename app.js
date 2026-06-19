@@ -1,5 +1,6 @@
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const APP_TITLE = "Demostar Sensorium";
+const PANEL_NAMES = new Set(["mission", "models", "signals", "result"]);
 const FALLBACK_MODELS = [
   {
     id: "google/gemini-2.5-flash",
@@ -58,6 +59,7 @@ const state = {
   generatedVoiceUrl: "",
   modelCatalog: [],
   modelCatalogLoaded: false,
+  activePanel: "mission",
   supported: {}
 };
 
@@ -140,7 +142,7 @@ function wireEvents() {
   els.recordBtn.addEventListener("click", toggleRecording);
   els.fullscreenBtn.addEventListener("click", toggleFullscreen);
   els.settingsBtn.addEventListener("click", () => {
-    els.settingsPanel.classList.toggle("collapsed");
+    showPanel("models", true);
   });
   els.clearKeyBtn.addEventListener("click", () => {
     state.apiKey = "";
@@ -196,7 +198,32 @@ function wireEvents() {
   els.speakBtn.addEventListener("click", speakResult);
   els.shareBtn.addEventListener("click", shareResult);
   els.copyBtn.addEventListener("click", copyResult);
+  wirePanelTabs();
   wireGestureSurface();
+}
+
+function wirePanelTabs() {
+  document.querySelectorAll(".tab-button").forEach((button) => {
+    button.addEventListener("click", () => showPanel(button.dataset.panel, true));
+  });
+}
+
+function showPanel(panelName, updateHash = false) {
+  if (!PANEL_NAMES.has(panelName)) return;
+  const target = document.querySelector(`.deck-panel[data-panel="${panelName}"]`);
+  if (!target) return;
+  state.activePanel = panelName;
+  document.querySelectorAll(".deck-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.panel === panelName);
+  });
+  document.querySelectorAll(".tab-button").forEach((button) => {
+    const isActive = button.dataset.panel === panelName;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+  if (updateHash) {
+    history.replaceState(null, "", `#${panelName}`);
+  }
 }
 
 async function loadOpenRouterModels() {
@@ -760,6 +787,7 @@ async function runFusion() {
 
     state.latestResult = result;
     renderResult(result);
+    showPanel("result", true);
     addEvent(state.apiKey ? "openrouter" : "local", "Field card ready");
     vibrate([25, 20, 25]);
   } catch (error) {
@@ -1010,20 +1038,16 @@ function addEvent(type, text) {
 }
 
 function renderCapabilities() {
+  const latestGesture = state.gestures.at(-1);
   const items = [
     ["OpenRouter", state.apiKey ? "Ready" : "Local preview", state.apiKey ? "ok" : "warn"],
     ["Models", state.modelCatalogLoaded ? `${state.modelCatalog.length} loaded` : "Fallback list", state.modelCatalogLoaded ? "ok" : "warn"],
-    ["Audio model", state.apiKey ? state.audioModel : "Needs key", state.apiKey ? "ok" : "warn"],
-    ["Voice model", state.audioVoiceModel || "Browser speech", state.audioVoiceModel ? "ok" : "warn"],
     ["Camera", state.videoStream ? "Active" : supportLabel("camera"), state.videoStream ? "ok" : state.supported.camera ? "warn" : "off"],
     ["Mic", state.audioStream ? "Active" : supportLabel("microphone"), state.audioStream ? "ok" : state.supported.microphone ? "warn" : "off"],
     ["Location", state.location ? `${state.location.accuracy} m` : supportLabel("geolocation"), state.location ? "ok" : state.supported.geolocation ? "warn" : "off"],
     ["Motion", state.motion ? `${state.motion.magnitude} m/s2` : supportLabel("motion"), state.motion ? "ok" : state.supported.motion ? "warn" : "off"],
     ["Tilt", state.orientation ? `${state.orientation.beta}/${state.orientation.gamma}` : supportLabel("orientation"), state.orientation ? "ok" : state.supported.orientation ? "warn" : "off"],
-    ["Haptics", state.supported.vibration ? "Available" : "Unavailable", state.supported.vibration ? "ok" : "off"],
-    ["Speech", state.supported.speech ? "Available" : "Unavailable", state.supported.speech ? "ok" : "off"],
-    ["Share", state.supported.share ? "Available" : "Unavailable", state.supported.share ? "ok" : "off"],
-    ["Battery", state.battery ? `${state.battery.level}${state.battery.charging ? " charging" : ""}` : supportLabel("battery"), state.battery ? "ok" : state.supported.battery ? "warn" : "off"]
+    ["Gesture", latestGesture ? latestGesture.type : "Waiting", latestGesture ? "ok" : "warn"]
   ];
   els.capabilityGrid.innerHTML = items.map(([label, value, status]) => (
     `<div class="capability ${status}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`
@@ -1049,7 +1073,7 @@ function renderEvents() {
   }
   els.eventLog.innerHTML = state.events.map((event) => {
     const time = event.at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    return `<div class="event"><span>${escapeHtml(time)}</span><strong>${escapeHtml(event.type)}</strong><span></span><div>${escapeHtml(event.text)}</div></div>`;
+    return `<div class="event"><span>${escapeHtml(time)}</span><strong>${escapeHtml(event.type)}</strong><div>${escapeHtml(event.text)}</div></div>`;
   }).join("");
 }
 
@@ -1328,6 +1352,7 @@ function init() {
   detectSupport();
   restoreSettings();
   wireEvents();
+  showPanel(window.location.hash.replace("#", "") || "mission");
   populateModelSelectors();
   renderCapabilities();
   renderMetrics();

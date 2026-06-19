@@ -18,7 +18,7 @@
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="fullscreenBtn" type="button" aria-label="Fullscreen">FS</button>
-          <button class="icon-button" id="settingsBtn" type="button" aria-label="Settings">Key</button>
+          <button class="icon-button" id="settingsBtn" type="button" aria-label="Models">Models</button>
         </div>
       </header>
 
@@ -41,50 +41,64 @@
           </div>
 
           <div class="stage-controls">
-            <button class="primary-action" id="armBtn" type="button">Prime sensors</button>
-            <button id="analyzeBtn" type="button">Fuse context</button>
-            <button id="recordBtn" type="button">Record voice</button>
+            <button class="primary-action" id="armBtn" type="button">Start</button>
+            <button id="analyzeBtn" type="button">Fuse</button>
+            <button id="recordBtn" type="button">Voice</button>
           </div>
         </section>
 
+        <nav class="tabbar" aria-label="Workspace panels">
+          <button class="tab-button active" data-panel="mission" type="button">Mission</button>
+          <button class="tab-button" data-panel="models" type="button">Models</button>
+          <button class="tab-button" data-panel="signals" type="button">Signals</button>
+          <button class="tab-button" data-panel="result" type="button">Result</button>
+        </nav>
+
         <section class="side-panel" aria-label="Control panel">
-          <div class="panel-section settings-panel" id="settingsPanel">
+          <div class="panel-section deck-panel settings-panel" id="settingsPanel" data-panel="models">
             <div class="section-heading">
               <h2>OpenRouter</h2>
               <button class="text-button" id="clearKeyBtn" type="button">Clear</button>
             </div>
-            <label for="apiKeyInput">API key</label>
-            <input id="apiKeyInput" type="password" inputmode="text" autocomplete="off" placeholder="sk-or-v1-...">
-            <p class="hint">Kept only in page memory. Reloading or closing the tab clears it. Without a key, the app runs a local fusion preview.</p>
-
-            <label for="vlmModelInput">Vision model</label>
-            <select id="vlmModelInput">
-              <option value="google/gemini-2.5-flash">Google: Gemini 2.5 Flash</option>
-            </select>
-
-            <label for="sttModelInput">Speech model</label>
-            <select id="sttModelInput">
-              <option value="openai/whisper-1">OpenAI: Whisper 1</option>
-            </select>
-
-            <label for="audioModelInput">Audio reasoning model</label>
-            <select id="audioModelInput">
-              <option value="google/gemini-2.5-flash">Google: Gemini 2.5 Flash</option>
-            </select>
-
-            <label for="audioVoiceModelInput">Audio reply model</label>
-            <select id="audioVoiceModelInput">
-              <option value="">Browser speech fallback</option>
-            </select>
+            <div class="api-field">
+              <label for="apiKeyInput">API key</label>
+              <input id="apiKeyInput" type="password" inputmode="text" autocomplete="off" placeholder="sk-or-v1-...">
+            </div>
+            <div class="model-grid">
+              <div>
+                <label for="vlmModelInput">Vision</label>
+                <select id="vlmModelInput">
+                  <option value="google/gemini-2.5-flash">Google: Gemini 2.5 Flash</option>
+                </select>
+              </div>
+              <div>
+                <label for="sttModelInput">Speech</label>
+                <select id="sttModelInput">
+                  <option value="openai/whisper-1">OpenAI: Whisper 1</option>
+                </select>
+              </div>
+              <div>
+                <label for="audioModelInput">Audio read</label>
+                <select id="audioModelInput">
+                  <option value="google/gemini-2.5-flash">Google: Gemini 2.5 Flash</option>
+                </select>
+              </div>
+              <div>
+                <label for="audioVoiceModelInput">Audio reply</label>
+                <select id="audioVoiceModelInput">
+                  <option value="">Browser speech fallback</option>
+                </select>
+              </div>
+            </div>
             <p class="hint" id="modelStatus">Loading OpenRouter model list...</p>
           </div>
 
-          <div class="panel-section">
+          <div class="panel-section deck-panel active" data-panel="mission">
             <div class="section-heading">
               <h2>Mission</h2>
               <button class="text-button" id="sampleMissionBtn" type="button">Sample</button>
             </div>
-            <textarea id="missionInput" rows="4" placeholder="What should the phone help you do right now?"></textarea>
+            <textarea id="missionInput" rows="3" placeholder="What should the phone help you do right now?"></textarea>
             <div class="mode-row" role="group" aria-label="Fusion mode">
               <button class="mode-chip active" data-mode="guide" type="button">Guide</button>
               <button class="mode-chip" data-mode="memory" type="button">Memory</button>
@@ -93,18 +107,13 @@
             </div>
           </div>
 
-          <div class="panel-section">
+          <div class="panel-section deck-panel" data-panel="signals">
             <div class="section-heading">
               <h2>Signals</h2>
-              <span class="live-dot" id="busyDot" aria-label="Idle"></span>
-            </div>
-            <div class="capability-grid" id="capabilityGrid"></div>
-          </div>
-
-          <div class="panel-section">
-            <div class="section-heading">
-              <h2>Context braid</h2>
-              <button class="text-button" id="clearEventsBtn" type="button">Reset</button>
+              <div class="signal-actions">
+                <span class="live-dot" id="busyDot" aria-label="Idle"></span>
+                <button class="text-button" id="clearEventsBtn" type="button">Reset</button>
+              </div>
             </div>
             <div class="metric-grid">
               <div>
@@ -124,24 +133,25 @@
                 <strong id="gestureMetric">None</strong>
               </div>
             </div>
+            <div class="capability-grid" id="capabilityGrid"></div>
             <div class="event-log" id="eventLog" aria-live="polite"></div>
           </div>
+
+          <section class="panel-section deck-panel result-panel" data-panel="result" aria-label="Fusion result">
+            <div class="section-heading">
+              <h2>AI field card</h2>
+              <div class="result-actions">
+                <button class="text-button" id="speakBtn" type="button">Speak</button>
+                <button class="text-button" id="shareBtn" type="button">Share</button>
+                <button class="text-button" id="copyBtn" type="button">Copy</button>
+              </div>
+            </div>
+            <div class="result-body" id="resultBody">
+              Fuse context to create a phone-only answer from sight, sound, location, motion, and touch.
+            </div>
+          </section>
         </section>
       </main>
-
-      <section class="result-panel" aria-label="Fusion result">
-        <div class="section-heading">
-          <h2>AI field card</h2>
-          <div class="result-actions">
-            <button class="text-button" id="speakBtn" type="button">Speak</button>
-            <button class="text-button" id="shareBtn" type="button">Share</button>
-            <button class="text-button" id="copyBtn" type="button">Copy</button>
-          </div>
-        </div>
-        <div class="result-body" id="resultBody">
-          Fuse context to create a phone-only answer from sight, sound, location, motion, and touch.
-        </div>
-      </section>
     </div>
 
     <script type="module" src="app.js"></script>
