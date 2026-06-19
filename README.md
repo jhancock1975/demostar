@@ -32,6 +32,14 @@ python3 server.py --lan-ip 10.0.0.196 --cert /tmp/demostar-certs/demostar-server
 
 On iPhone, install and trust the local CA from `http://10.0.0.196:8001/demostar-ca.crt`, then open `https://10.0.0.196:8443/`.
 
+## GitHub Pages
+
+The public demo is deployed to GitHub Pages:
+
+```text
+https://jhancock1975.github.io/demostar/
+```
+
 ## OpenRouter Setup
 
 1. Open the app on an HTTPS origin.
@@ -43,7 +51,7 @@ On iPhone, install and trust the local CA from `http://10.0.0.196:8001/demostar-
    - Audio reply model: optional; set this to an OpenRouter model that supports audio output if you want model-generated speech
 4. Tap `Prime sensors`, grant browser permissions, then tap `Fuse context`.
 
-The API key is stored in `sessionStorage`, so it clears when the browser session ends. For production, put OpenRouter behind a server-side proxy instead of calling it from the browser.
+The API key is kept only in page memory. It is not written to `localStorage`, `sessionStorage`, cookies, IndexedDB, or the service worker cache, so the user must enter it again after every reload or new tab. For production, put OpenRouter behind a server-side proxy instead of calling it from the browser.
 
 ## Supporting Files
 
@@ -56,6 +64,7 @@ The API key is stored in `sessionStorage`, so it clears when the browser session
 | [service-worker.js](service-worker.js) | Static asset cache for installable/offline behavior. |
 | [server.py](server.py) | Local LAN HTTPS server helper. |
 | [assets/icon.svg](assets/icon.svg) | App icon. |
+| [.github/workflows/pages.yml](.github/workflows/pages.yml) | GitHub Pages deployment workflow. |
 | [LICENSE](LICENSE) | Apache License 2.0 terms. |
 | [.gitignore](.gitignore) | Local file ignore rules for agents, IDEs, Python artifacts, and environment files. |
 

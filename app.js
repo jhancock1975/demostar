@@ -93,7 +93,7 @@ function detectSupport() {
 }
 
 function restoreSettings() {
-  state.apiKey = sessionStorage.getItem("openrouter-api-key") || "";
+  state.apiKey = "";
   state.vlmModel = sessionStorage.getItem("openrouter-vlm-model") || state.vlmModel;
   state.sttModel = sessionStorage.getItem("openrouter-stt-model") || state.sttModel;
   state.audioModel = sessionStorage.getItem("openrouter-audio-model") || state.audioModel;
@@ -116,17 +116,11 @@ function wireEvents() {
   els.clearKeyBtn.addEventListener("click", () => {
     state.apiKey = "";
     els.apiKeyInput.value = "";
-    sessionStorage.removeItem("openrouter-api-key");
     addEvent("key", "OpenRouter key cleared");
     renderCapabilities();
   });
   els.apiKeyInput.addEventListener("input", (event) => {
     state.apiKey = event.target.value.trim();
-    if (state.apiKey) {
-      sessionStorage.setItem("openrouter-api-key", state.apiKey);
-    } else {
-      sessionStorage.removeItem("openrouter-api-key");
-    }
     renderCapabilities();
   });
   els.vlmModelInput.addEventListener("input", (event) => {
