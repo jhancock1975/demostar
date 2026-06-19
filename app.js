@@ -30,6 +30,7 @@ const FALLBACK_MODELS = [
 
 const state = {
   apiKey: "",
+  keyValidated: false,
   vlmModel: "google/gemini-2.5-flash",
   sttModel: "openai/whisper-1",
   audioModel: "google/gemini-2.5-flash",
@@ -67,6 +68,11 @@ const els = {};
 
 function bindElements() {
   [
+    "authGate",
+    "appShell",
+    "gateApiKeyInput",
+    "validateKeyBtn",
+    "authError",
     "cameraPreview",
     "snapshotCanvas",
     "cameraEmpty",
@@ -78,7 +84,6 @@ function bindElements() {
     "fullscreenBtn",
     "settingsBtn",
     "settingsPanel",
-    "apiKeyInput",
     "vlmModelInput",
     "sttModelInput",
     "audioModelInput",
@@ -125,11 +130,11 @@ function detectSupport() {
 
 function restoreSettings() {
   state.apiKey = "";
+  state.keyValidated = false;
   state.vlmModel = sessionStorage.getItem("openrouter-vlm-model") || state.vlmModel;
   state.sttModel = sessionStorage.getItem("openrouter-stt-model") || state.sttModel;
   state.audioModel = sessionStorage.getItem("openrouter-audio-model") || state.audioModel;
   state.audioVoiceModel = sessionStorage.getItem("openrouter-audio-voice-model") || state.audioVoiceModel;
-  els.apiKeyInput.value = state.apiKey;
   els.vlmModelInput.value = state.vlmModel;
   els.sttModelInput.value = state.sttModel;
   els.audioModelInput.value = state.audioModel;
@@ -137,6 +142,13 @@ function restoreSettings() {
 }
 
 function wireEvents() {
+  els.validateKeyBtn.addEventListener("click", validateAndUnlock);
+  els.gateApiKeyInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") validateAndUnlock();
+  });
+  els.gateApiKeyInput.addEventListener("input", () => {
+    setAuthError("");
+  });
   els.armBtn.addEventListener("click", primeSensors);
   els.analyzeBtn.addEventListener("click", runFusion);
   els.recordBtn.addEventListener("click", toggleRecording);
@@ -145,14 +157,7 @@ function wireEvents() {
     showPanel("models", true);
   });
   els.clearKeyBtn.addEventListener("click", () => {
-    state.apiKey = "";
-    els.apiKeyInput.value = "";
-    addEvent("key", "OpenRouter key cleared");
-    renderCapabilities();
-  });
-  els.apiKeyInput.addEventListener("input", (event) => {
-    state.apiKey = event.target.value.trim();
-    renderCapabilities();
+    lockApp("OpenRouter key cleared. Enter a key to continue.");
   });
   els.vlmModelInput.addEventListener("change", (event) => {
     state.vlmModel = event.target.value.trim() || "google/gemini-2.5-flash";
@@ -200,6 +205,84 @@ function wireEvents() {
   els.copyBtn.addEventListener("click", copyResult);
   wirePanelTabs();
   wireGestureSurface();
+}
+
+async function validateAndUnlock() {
+  const apiKey = els.gateApiKeyInput.value.trim();
+  if (!apiKey) {
+    setAuthError("Enter an OpenRouter API key.");
+    return;
+  }
+
+  els.validateKeyBtn.disabled = true;
+  els.validateKeyBtn.textContent = "Validating...";
+  setAuthError("");
+
+  try {
+    const keyInfo = await validateOpenRouterKey(apiKey);
+    state.apiKey = apiKey;
+    state.keyValidated = true;
+    els.authGate.classList.add("hidden");
+    els.appShell.classList.remove("locked");
+    els.appShell.removeAttribute("aria-hidden");
+    els.gateApiKeyInput.value = "";
+    addEvent("key", keyInfo.label || "OpenRouter key validated");
+    renderCapabilities();
+  } catch (error) {
+    state.apiKey = "";
+    state.keyValidated = false;
+    setAuthError(cleanError(error));
+  } finally {
+    els.validateKeyBtn.disabled = false;
+    els.validateKeyBtn.textContent = "Validate key";
+  }
+}
+
+async function validateOpenRouterKey(apiKey) {
+  const response = await fetch(`${OPENROUTER_BASE}/key`, {
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Accept": "application/json",
+      "HTTP-Referer": window.location.origin,
+      "X-OpenRouter-Title": APP_TITLE
+    }
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(extractOpenRouterError(payload, text, response.status));
+  }
+  return {
+    payload,
+    label: payload?.data?.label || payload?.label || "OpenRouter key validated"
+  };
+}
+
+function extractOpenRouterError(payload, rawText, status) {
+  return payload?.error?.message
+    || payload?.message
+    || rawText
+    || `OpenRouter key validation failed with status ${status}`;
+}
+
+function lockApp(message = "") {
+  state.apiKey = "";
+  state.keyValidated = false;
+  els.appShell.classList.add("locked");
+  els.appShell.setAttribute("aria-hidden", "true");
+  els.authGate.classList.remove("hidden");
+  els.gateApiKeyInput.value = "";
+  setAuthError(message);
+  renderCapabilities();
+}
+
+function setAuthError(message) {
+  els.authError.textContent = message;
 }
 
 function wirePanelTabs() {
@@ -736,15 +819,28 @@ function preferredAudioMimeType() {
 }
 
 async function runFusion() {
+  if (!state.keyValidated || !state.apiKey) {
+    lockApp("Enter a valid OpenRouter key before sending sensor data to AI.");
+    return;
+  }
   setBusy(true);
-  addEvent("fusion", "Building multimodal context");
+  addEvent("openrouter", "Sending mission and sensor data to AI");
+  showPanel("result", true);
+  renderResult("### Sending to OpenRouter\nCollecting phone sensors, camera frame, audio, mission text, and gesture state now.");
   pulseStage();
   vibrate([18, 22, 18]);
 
   try {
-    if (!state.videoStream && state.supported.camera) {
-      await startCamera();
-    }
+    await Promise.allSettled([
+      startCamera(),
+      startMicrophone(),
+      startLocation(),
+      startMotion(),
+      startBattery(),
+      keepAwake()
+    ]);
+    tryStartSpeechRecognition();
+
     const frame = captureFrame();
     let transcript = state.transcript;
 
@@ -781,14 +877,13 @@ async function runFusion() {
     }
 
     const context = collectContext(transcript, !!frame, audioInsight);
-    const result = state.apiKey
-      ? await askOpenRouter(context, frame)
-      : makeLocalFusion(context);
+    const modelResult = await askOpenRouter(context, frame);
+    const result = formatOpenRouterResult(context, modelResult);
 
     state.latestResult = result;
     renderResult(result);
     showPanel("result", true);
-    addEvent(state.apiKey ? "openrouter" : "local", "Field card ready");
+    addEvent("openrouter", "Model response ready");
     vibrate([25, 20, 25]);
   } catch (error) {
     const message = `Fusion failed: ${cleanError(error)}`;
@@ -931,13 +1026,35 @@ async function openRouterFetch(path, body) {
 
 function buildPrompt(context) {
   return [
-    "Make a field card for this live phone context.",
+    "Make a field card from this live phone context. This JSON is the phone sensor payload.",
     `Fusion mode: ${state.mode}`,
     `User mission: ${context.userMission || "Infer the most useful next step."}`,
     "Use this sensor JSON as evidence:",
     JSON.stringify(context, null, 2),
-    "The image, if attached, is the current camera frame. Use it with the sensor JSON. Keep the answer useful on a phone screen."
+    "The image, if attached, is the current camera frame. Use it with the sensor JSON. Keep the answer useful on a phone screen. Explicitly mention which sensor signals affected the answer."
   ].join("\n\n");
+}
+
+function formatOpenRouterResult(context, modelResult) {
+  const sensors = [
+    context.camera.frameIncluded ? "camera frame" : "no camera frame",
+    context.microphone.active ? `microphone level ${context.microphone.level}` : "microphone off",
+    context.microphone.transcript ? "voice transcript" : "no voice transcript",
+    context.location ? `location +/- ${context.location.accuracy}m` : "no location",
+    context.motion ? `motion ${context.motion.magnitude} m/s2` : "no motion",
+    context.orientation ? "orientation" : "no orientation",
+    context.gestures.length ? `${context.gestures.length} gestures` : "no gestures"
+  ];
+
+  return [
+    "### Sent to OpenRouter",
+    `Mission: ${context.userMission || "No mission text provided."}`,
+    `Models: vision/context \`${state.vlmModel}\`, speech \`${state.sttModel}\`, audio \`${state.audioModel}\`.`,
+    `Sensor payload: ${sensors.join(", ")}.`,
+    "",
+    "### Model result",
+    modelResult
+  ].join("\n");
 }
 
 function collectContext(transcript, frameIncluded, audioInsight = "") {
@@ -1040,7 +1157,7 @@ function addEvent(type, text) {
 function renderCapabilities() {
   const latestGesture = state.gestures.at(-1);
   const items = [
-    ["OpenRouter", state.apiKey ? "Ready" : "Local preview", state.apiKey ? "ok" : "warn"],
+    ["OpenRouter", state.keyValidated ? "Ready" : "Locked", state.keyValidated ? "ok" : "warn"],
     ["Models", state.modelCatalogLoaded ? `${state.modelCatalog.length} loaded` : "Fallback list", state.modelCatalogLoaded ? "ok" : "warn"],
     ["Camera", state.videoStream ? "Active" : supportLabel("camera"), state.videoStream ? "ok" : state.supported.camera ? "warn" : "off"],
     ["Mic", state.audioStream ? "Active" : supportLabel("microphone"), state.audioStream ? "ok" : state.supported.microphone ? "warn" : "off"],

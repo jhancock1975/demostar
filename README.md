@@ -43,15 +43,18 @@ https://jhancock1975.github.io/demostar/
 ## OpenRouter Setup
 
 1. Open the app on an HTTPS origin.
-2. Paste an OpenRouter API key into the `OpenRouter` panel.
-3. Keep or change the default models:
+2. Enter an OpenRouter API key on the first screen.
+3. If the key is valid, the sensor app appears. If it is invalid, the app shows the OpenRouter error message.
+4. Keep or change the default models:
    - Vision/chat model: `google/gemini-2.5-flash`
    - Speech-to-text model: `openai/whisper-1`
    - Audio reasoning model: `google/gemini-2.5-flash`
    - Audio reply model: optional; set this to an OpenRouter model that supports audio output if you want model-generated speech
-4. Tap `Prime sensors`, grant browser permissions, then tap `Fuse context`.
+5. Enter a mission, then tap `Send to AI`.
 
 The model dropdowns are populated from OpenRouter's `/api/v1/models` endpoint on page load and filtered by each component's modality needs.
+
+The `Send to AI` action sends the mission, camera frame, audio, location, motion, orientation, gesture state, and device state to the selected OpenRouter models. The result panel shows a short summary of what was sent plus the model response.
 
 The API key is kept only in page memory. It is not written to `localStorage`, `sessionStorage`, cookies, IndexedDB, or the service worker cache, so the user must enter it again after every reload or new tab. For production, put OpenRouter behind a server-side proxy instead of calling it from the browser.
 

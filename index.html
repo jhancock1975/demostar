@@ -10,7 +10,19 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <div class="app-shell">
+    <section class="auth-gate" id="authGate" aria-label="OpenRouter API key required">
+      <div class="auth-card">
+        <p class="eyebrow">Demostar</p>
+        <h1>Sensorium</h1>
+        <p class="auth-copy">Enter an OpenRouter key to start. The key stays only in page memory and is cleared on reload.</p>
+        <label for="gateApiKeyInput">OpenRouter API key</label>
+        <input id="gateApiKeyInput" type="password" inputmode="text" autocomplete="off" placeholder="sk-or-v1-...">
+        <button class="primary-action" id="validateKeyBtn" type="button">Validate key</button>
+        <p class="auth-error" id="authError" role="alert" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <div class="app-shell locked" id="appShell" aria-hidden="true">
       <header class="topbar">
         <div>
           <p class="eyebrow">Demostar</p>
@@ -41,8 +53,8 @@
           </div>
 
           <div class="stage-controls">
-            <button class="primary-action" id="armBtn" type="button">Start</button>
-            <button id="analyzeBtn" type="button">Fuse</button>
+            <button id="armBtn" type="button">Start sensors</button>
+            <button class="primary-action" id="analyzeBtn" type="button">Send to AI</button>
             <button id="recordBtn" type="button">Voice</button>
           </div>
         </section>
@@ -59,10 +71,6 @@
             <div class="section-heading">
               <h2>OpenRouter</h2>
               <button class="text-button" id="clearKeyBtn" type="button">Clear</button>
-            </div>
-            <div class="api-field">
-              <label for="apiKeyInput">API key</label>
-              <input id="apiKeyInput" type="password" inputmode="text" autocomplete="off" placeholder="sk-or-v1-...">
             </div>
             <div class="model-grid">
               <div>
@@ -147,7 +155,7 @@
               </div>
             </div>
             <div class="result-body" id="resultBody">
-              Fuse context to create a phone-only answer from sight, sound, location, motion, and touch.
+              Press Send to AI to send mission, camera, audio, location, motion, orientation, and gesture data to OpenRouter.
             </div>
           </section>
         </section>
