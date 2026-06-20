@@ -1,6 +1,45 @@
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const APP_TITLE = "Demostar Sensorium";
-const PANEL_NAMES = new Set(["mission", "models", "signals", "result"]);
+const PANEL_NAMES = new Set(["mission", "models", "agents", "signals", "result"]);
+const AGENTS = [
+  {
+    id: "scene",
+    name: "Scene Scout",
+    specialty: "camera + visual context",
+    model: "vision",
+    usesImage: true,
+    prompt: "Inspect the current camera frame and sensor JSON. Identify visible objects, spatial cues, hazards, useful affordances, and anything the user should point at or move toward next. Tie every claim to visual or sensor evidence."
+  },
+  {
+    id: "sound",
+    name: "Sound Scout",
+    specialty: "audio + speech",
+    model: "audio",
+    usesAudio: true,
+    prompt: "Analyze the microphone clip, transcript, mic level, and mission. Extract spoken intent, background sound clues, urgency, uncertainty, and any audio-only context that changes the recommendation. Do not identify the speaker or infer protected traits."
+  },
+  {
+    id: "motion",
+    name: "Motion Navigator",
+    specialty: "location + motion",
+    model: "vision",
+    prompt: "Analyze location, movement, device orientation, speed, heading, battery, network, and viewport state. Explain what physical posture or place context the phone sensors imply and how the user should move the phone next."
+  },
+  {
+    id: "intent",
+    name: "Intent Mapper",
+    specialty: "mission + gestures",
+    model: "vision",
+    prompt: "Analyze the mission, current mode, gestures, taps, swipes, shakes, and voice transcript. Infer what the user is trying to accomplish and propose the clearest next interaction."
+  },
+  {
+    id: "safety",
+    name: "Safety Officer",
+    specialty: "risk + constraints",
+    model: "vision",
+    prompt: "Review the sensor payload and agent mission for safety, privacy, uncertainty, and failure modes. Flag practical risks and provide a safe next action without overclaiming."
+  }
+];
 const FALLBACK_MODELS = [
   {
     id: "google/gemini-2.5-flash",
@@ -41,6 +80,7 @@ const state = {
   mediaRecorder: null,
   audioChunks: [],
   lastAudioBlob: null,
+  lastAudioBase64: "",
   lastAudioAt: 0,
   transcript: "",
   micLevel: 0,
@@ -61,6 +101,8 @@ const state = {
   modelCatalog: [],
   modelCatalogLoaded: false,
   activePanel: "mission",
+  agentReports: [],
+  agentStatus: {},
   supported: {}
 };
 
@@ -89,6 +131,8 @@ function bindElements() {
     "audioModelInput",
     "audioVoiceModelInput",
     "modelStatus",
+    "agentGrid",
+    "agentSummary",
     "clearKeyBtn",
     "missionInput",
     "sampleMissionBtn",
@@ -205,6 +249,15 @@ function wireEvents() {
   els.copyBtn.addEventListener("click", copyResult);
   wirePanelTabs();
   wireGestureSurface();
+}
+
+function resetAgents(status = "idle") {
+  state.agentReports = [];
+  state.agentStatus = {};
+  AGENTS.forEach((agent) => {
+    state.agentStatus[agent.id] = { status, text: agent.specialty };
+  });
+  renderAgents();
 }
 
 async function validateAndUnlock() {
@@ -774,6 +827,7 @@ async function startRecording(autoStopMs = 7000) {
     return null;
   }
   state.audioChunks = [];
+  state.lastAudioBase64 = "";
   const mimeType = preferredAudioMimeType();
   const options = mimeType ? { mimeType } : undefined;
   state.mediaRecorder = new MediaRecorder(state.audioStream, options);
@@ -853,6 +907,7 @@ async function runFusion() {
 
     let audioInsight = "";
     if (state.apiKey && state.lastAudioBlob) {
+      state.lastAudioBase64 = await blobToBase64Payload(state.lastAudioBlob);
       try {
         const sttText = await transcribeAudio(state.lastAudioBlob);
         if (sttText) {
@@ -864,21 +919,12 @@ async function runFusion() {
         addEvent("stt", cleanError(error));
       }
 
-      try {
-        audioInsight = await analyzeAudioWithModel(state.lastAudioBlob, transcript);
-        state.latestAudioInsight = audioInsight;
-        if (audioInsight) {
-          addEvent("audio model", "Raw audio analyzed");
-        }
-      } catch (error) {
-        state.latestAudioInsight = "";
-        addEvent("audio model", cleanError(error));
-      }
     }
 
     const context = collectContext(transcript, !!frame, audioInsight);
-    const modelResult = await askOpenRouter(context, frame);
-    const result = formatOpenRouterResult(context, modelResult);
+    const agentReports = await runAgentCouncil(context, frame, state.lastAudioBlob);
+    const modelResult = await askCoordinator(context, agentReports);
+    const result = formatOpenRouterResult(context, agentReports, modelResult);
 
     state.latestResult = result;
     renderResult(result);
@@ -961,14 +1007,86 @@ async function analyzeAudioWithModel(blob, transcript) {
   return extractMessageText(response);
 }
 
-async function askOpenRouter(context, frameDataUrl) {
+async function runAgentCouncil(context, frameDataUrl, audioBlob) {
+  resetAgents("queued");
+  showPanel("agents", true);
+  renderResult("### Agent council running\nSpecialist agents are analyzing the phone sensor payload now.");
+  const reports = await Promise.all(AGENTS.map((agent) => runAgent(agent, context, frameDataUrl, audioBlob)
+    .then((report) => {
+      state.agentStatus[agent.id] = { status: "done", text: compactAgentText(report.text) };
+      state.agentReports = [...state.agentReports.filter((item) => item.id !== report.id), report];
+      renderAgents();
+      return report;
+    })
+    .catch((error) => {
+      const report = {
+        id: agent.id,
+        name: agent.name,
+        specialty: agent.specialty,
+        model: agentModel(agent),
+        text: `Agent failed: ${cleanError(error)}`,
+        error: true
+      };
+      state.agentStatus[agent.id] = { status: "error", text: cleanError(error) };
+      state.agentReports = [...state.agentReports.filter((item) => item.id !== report.id), report];
+      renderAgents();
+      return report;
+    })));
+  state.agentReports = reports;
+  renderAgents();
+  return reports;
+}
+
+async function runAgent(agent, context, frameDataUrl, audioBlob) {
+  state.agentStatus[agent.id] = { status: "running", text: "Sending sensor payload to OpenRouter" };
+  renderAgents();
+  const model = agentModel(agent);
+  const content = agentContent(agent, context, frameDataUrl, audioBlob);
+  const data = await openRouterFetch("/chat/completions", {
+    model,
+    messages: [
+      {
+        role: "system",
+        content: [
+          `You are ${agent.name}, a specialist in ${agent.specialty}.`,
+          "You are one agent in a phone-sensor AI council. Use only the provided phone sensor data, image, and audio.",
+          "Return concise Markdown with: Evidence, Interpretation, Next move. Be explicit about uncertainty."
+        ].join(" ")
+      },
+      {
+        role: "user",
+        content
+      }
+    ],
+    temperature: 0.35,
+    max_tokens: 420
+  });
+  return {
+    id: agent.id,
+    name: agent.name,
+    specialty: agent.specialty,
+    model,
+    text: extractMessageText(data)
+  };
+}
+
+function agentModel(agent) {
+  return agent.model === "audio" ? state.audioModel : state.vlmModel;
+}
+
+function agentContent(agent, context, frameDataUrl, audioBlob) {
   const content = [
     {
       type: "text",
-      text: buildPrompt(context)
+      text: [
+        agent.prompt,
+        "",
+        "Phone sensor JSON:",
+        JSON.stringify(context, null, 2)
+      ].join("\n")
     }
   ];
-  if (frameDataUrl) {
+  if (agent.usesImage && frameDataUrl) {
     content.push({
       type: "image_url",
       image_url: {
@@ -976,17 +1094,39 @@ async function askOpenRouter(context, frameDataUrl) {
       }
     });
   }
+  if (agent.usesAudio && audioBlob && state.lastAudioBase64) {
+    content.push({
+      type: "input_audio",
+      input_audio: {
+        data: state.lastAudioBase64 || "",
+        format: audioFormat(audioBlob.type)
+      }
+    });
+  }
+  return content;
+}
 
+function compactAgentText(text) {
+  return stripMarkdown(text).replace(/\s+/g, " ").slice(0, 86);
+}
+
+async function askCoordinator(context, agentReports) {
   const data = await openRouterFetch("/chat/completions", {
     model: state.vlmModel,
     messages: [
       {
         role: "system",
-        content: "You are Sensorium, a mobile multimodal field copilot. Fuse phone camera, speech, location, motion, orientation, touch gestures, and device state into one useful answer. Be specific about what evidence came from which phone signal. Do not claim certainty when a signal is missing. Return concise Markdown with: Read, Why this needed the phone, Action, Next gesture."
+        content: "You are Sensorium Coordinator. Fuse specialist agent reports and the original phone sensor payload into one useful phone-screen answer. Be specific about which agents and sensor signals affected the recommendation. Return concise Markdown with: Read, Agent consensus, Action, Next gesture."
       },
       {
         role: "user",
-        content
+        content: [
+          "Original phone sensor payload:",
+          JSON.stringify(context, null, 2),
+          "",
+          "Specialist agent reports:",
+          JSON.stringify(agentReports, null, 2)
+        ].join("\n")
       }
     ],
     temperature: 0.55,
@@ -1035,7 +1175,7 @@ function buildPrompt(context) {
   ].join("\n\n");
 }
 
-function formatOpenRouterResult(context, modelResult) {
+function formatOpenRouterResult(context, agentReports, modelResult) {
   const sensors = [
     context.camera.frameIncluded ? "camera frame" : "no camera frame",
     context.microphone.active ? `microphone level ${context.microphone.level}` : "microphone off",
@@ -1049,8 +1189,9 @@ function formatOpenRouterResult(context, modelResult) {
   return [
     "### Sent to OpenRouter",
     `Mission: ${context.userMission || "No mission text provided."}`,
-    `Models: vision/context \`${state.vlmModel}\`, speech \`${state.sttModel}\`, audio \`${state.audioModel}\`.`,
+    `Models: coordinator \`${state.vlmModel}\`, speech \`${state.sttModel}\`, audio \`${state.audioModel}\`.`,
     `Sensor payload: ${sensors.join(", ")}.`,
+    `Agents: ${agentReports.map((report) => `${report.name} (${report.model})`).join(", ")}.`,
     "",
     "### Model result",
     modelResult
@@ -1169,6 +1310,30 @@ function renderCapabilities() {
   els.capabilityGrid.innerHTML = items.map(([label, value, status]) => (
     `<div class="capability ${status}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`
   )).join("");
+}
+
+function renderAgents() {
+  if (!els.agentGrid) return;
+  const doneCount = AGENTS.filter((agent) => state.agentStatus[agent.id]?.status === "done").length;
+  const runningCount = AGENTS.filter((agent) => state.agentStatus[agent.id]?.status === "running").length;
+  const errorCount = AGENTS.filter((agent) => state.agentStatus[agent.id]?.status === "error").length;
+  if (els.agentSummary) {
+    els.agentSummary.textContent = runningCount
+      ? `${runningCount} running`
+      : errorCount
+        ? `${doneCount} done, ${errorCount} issue`
+        : `${doneCount}/${AGENTS.length} done`;
+  }
+  els.agentGrid.innerHTML = AGENTS.map((agent) => {
+    const status = state.agentStatus[agent.id] || { status: "idle", text: agent.specialty };
+    return [
+      `<div class="agent-card ${escapeHtml(status.status)}">`,
+      `<div><strong>${escapeHtml(agent.name)}</strong><span>${escapeHtml(agent.specialty)}</span></div>`,
+      `<em>${escapeHtml(status.status)}</em>`,
+      `<p>${escapeHtml(status.text || agent.specialty)}</p>`,
+      "</div>"
+    ].join("");
+  }).join("");
 }
 
 function supportLabel(key) {
@@ -1469,6 +1634,7 @@ function init() {
   detectSupport();
   restoreSettings();
   wireEvents();
+  resetAgents();
   showPanel(window.location.hash.replace("#", "") || "mission");
   populateModelSelectors();
   renderCapabilities();

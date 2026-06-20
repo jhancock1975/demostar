@@ -355,7 +355,7 @@ h2 {
 .tabbar {
   min-height: 42px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -406,6 +406,10 @@ h2 {
 
 [data-panel="signals"].active {
   grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+[data-panel="agents"].active {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .section-heading {
@@ -468,6 +472,83 @@ h2 {
   border-color: var(--accent-2);
   color: var(--text);
   background: rgba(70, 215, 255, 0.14);
+}
+
+.agent-summary {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.agent-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  overflow: hidden;
+}
+
+.agent-card {
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 7px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 4px 6px;
+}
+
+.agent-card strong,
+.agent-card span,
+.agent-card p {
+  overflow: hidden;
+  display: block;
+}
+
+.agent-card strong {
+  font-size: 0.76rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.agent-card span {
+  color: var(--muted);
+  font-size: 0.62rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.agent-card em {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.agent-card p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #dfe6df;
+  font-size: 0.66rem;
+  line-height: 1.18;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.agent-card.running {
+  border-color: var(--accent-2);
+}
+
+.agent-card.done {
+  border-color: rgba(92, 242, 181, 0.5);
+}
+
+.agent-card.error {
+  border-color: rgba(255, 107, 107, 0.65);
 }
 
 .capability-grid {

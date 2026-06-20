@@ -54,7 +54,15 @@ https://jhancock1975.github.io/demostar/
 
 The model dropdowns are populated from OpenRouter's `/api/v1/models` endpoint on page load and filtered by each component's modality needs.
 
-The `Send to AI` action sends the mission, camera frame, audio, location, motion, orientation, gesture state, and device state to the selected OpenRouter models. The result panel shows a short summary of what was sent plus the model response.
+The `Send to AI` action sends the mission, camera frame, audio, location, motion, orientation, gesture state, and device state to a council of OpenRouter-powered specialist agents:
+
+- `Scene Scout`: camera and visual context.
+- `Sound Scout`: microphone audio and speech.
+- `Motion Navigator`: location, movement, and orientation.
+- `Intent Mapper`: mission, gestures, and interaction intent.
+- `Safety Officer`: risk, privacy, and uncertainty checks.
+
+The coordinator model then fuses those specialist reports into the final result. The result panel shows a short summary of what was sent plus the model response.
 
 The API key is kept only in page memory. It is not written to `localStorage`, `sessionStorage`, cookies, IndexedDB, or the service worker cache, so the user must enter it again after every reload or new tab. For production, put OpenRouter behind a server-side proxy instead of calling it from the browser.
 

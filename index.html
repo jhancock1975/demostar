@@ -62,6 +62,7 @@
         <nav class="tabbar" aria-label="Workspace panels">
           <button class="tab-button active" data-panel="mission" type="button">Mission</button>
           <button class="tab-button" data-panel="models" type="button">Models</button>
+          <button class="tab-button" data-panel="agents" type="button">Agents</button>
           <button class="tab-button" data-panel="signals" type="button">Signals</button>
           <button class="tab-button" data-panel="result" type="button">Result</button>
         </nav>
@@ -113,6 +114,14 @@
               <button class="mode-chip" data-mode="safety" type="button">Safety</button>
               <button class="mode-chip" data-mode="maker" type="button">Maker</button>
             </div>
+          </div>
+
+          <div class="panel-section deck-panel" data-panel="agents">
+            <div class="section-heading">
+              <h2>Agent council</h2>
+              <span class="agent-summary" id="agentSummary">Ready</span>
+            </div>
+            <div class="agent-grid" id="agentGrid"></div>
           </div>
 
           <div class="panel-section deck-panel" data-panel="signals">
