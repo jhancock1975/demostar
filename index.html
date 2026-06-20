@@ -11,15 +11,15 @@
   </head>
   <body>
     <section class="auth-gate" id="authGate" aria-label="OpenRouter API key required">
-      <div class="auth-card">
+      <form class="auth-card" id="authForm" autocomplete="off">
         <p class="eyebrow">Demostar</p>
         <h1>Sensorium</h1>
         <p class="auth-copy">Enter an OpenRouter key to start. The key stays only in page memory and is cleared on reload.</p>
         <label for="gateApiKeyInput">OpenRouter API key</label>
         <input id="gateApiKeyInput" type="password" inputmode="text" autocomplete="off" placeholder="sk-or-v1-...">
-        <button class="primary-action" id="validateKeyBtn" type="button">Validate key</button>
+        <button class="primary-action" id="validateKeyBtn" type="submit">Validate key</button>
         <p class="auth-error" id="authError" role="alert" aria-live="polite"></p>
-      </div>
+      </form>
     </section>
 
     <div class="app-shell locked" id="appShell" aria-hidden="true">
@@ -83,7 +83,7 @@
               <div>
                 <label for="sttModelInput">Speech</label>
                 <select id="sttModelInput">
-                  <option value="openai/whisper-1">OpenAI: Whisper 1</option>
+                  <option value="openai/whisper-large-v3">OpenAI: Whisper Large V3</option>
                 </select>
               </div>
               <div>

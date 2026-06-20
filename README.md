@@ -7,12 +7,11 @@ A mobile browser demo that fuses camera, microphone, location, motion, device or
 Sensorium turns a phone into a multimodal AI instrument:
 
 - The camera captures the current scene for a vision model.
-- The microphone records a short voice clip, sends it through OpenRouter speech-to-text, and also sends the raw audio to an audio-capable chat model for sound/voice/environment reasoning.
-- GPS, motion, tilt, battery, network, screen, and gesture telemetry are fused into the model prompt.
+- The microphone records a short voice clip, down-samples it to a browser-generated WAV payload, sends it through OpenRouter speech-to-text, and can also send the raw audio to an audio-capable chat model for sound/voice/environment reasoning.
+- GPS, motion, tilt, battery, network, screen, gestures, recent events, and derived phone-state signals are fused into the model prompt.
 - Taps, double taps, long press, swipes, pinches, rotations, and shake gestures become intent signals.
 - The result can be spoken aloud through browser speech or an OpenRouter audio-output model, copied, shared, and paired with haptic feedback.
-
-Without an OpenRouter key, the app still runs a local fusion preview so the UI and phone sensors can be tested.
+- The result includes payload sizes and debug detail when an agent or coordinator call fails.
 
 ## Run Locally
 
@@ -47,7 +46,7 @@ https://jhancock1975.github.io/demostar/
 3. If the key is valid, the sensor app appears. If it is invalid, the app shows the OpenRouter error message.
 4. Keep or change the default models:
    - Vision/chat model: `google/gemini-2.5-flash`
-   - Speech-to-text model: `openai/whisper-1`
+   - Speech-to-text model: `openai/whisper-large-v3`
    - Audio reasoning model: `google/gemini-2.5-flash`
    - Audio reply model: optional; set this to an OpenRouter model that supports audio output if you want model-generated speech
 5. Enter a mission, then tap `Send to AI`.
@@ -59,10 +58,10 @@ The `Send to AI` action sends the mission, camera frame, audio, location, motion
 - `Scene Scout`: camera and visual context.
 - `Sound Scout`: microphone audio and speech.
 - `Motion Navigator`: location, movement, and orientation.
-- `Intent Mapper`: mission, gestures, and interaction intent.
+- `Action Planner`: mission, gestures, interaction intent, and next phone action.
 - `Safety Officer`: risk, privacy, and uncertainty checks.
 
-The coordinator model then fuses those specialist reports into the final result. The result panel shows a short summary of what was sent plus the model response.
+The agent council runs with limited concurrency for mobile reliability. The coordinator model then fuses those specialist reports into the final result. The result panel shows a short summary of what was sent, payload sizes, any partial failures, and the model response.
 
 The API key is kept only in page memory. It is not written to `localStorage`, `sessionStorage`, cookies, IndexedDB, or the service worker cache, so the user must enter it again after every reload or new tab. For production, put OpenRouter behind a server-side proxy instead of calling it from the browser.
 

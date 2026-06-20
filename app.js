@@ -1,6 +1,9 @@
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const APP_TITLE = "Demostar Sensorium";
 const PANEL_NAMES = new Set(["mission", "models", "agents", "signals", "result"]);
+const OPENROUTER_TIMEOUT_MS = 60000;
+const AGENT_CONCURRENCY = 2;
+const SAFE_AUDIO_FORMATS = new Set(["wav", "mp3", "m4a", "aac", "ogg", "flac", "pcm16"]);
 const AGENTS = [
   {
     id: "scene",
@@ -27,10 +30,10 @@ const AGENTS = [
   },
   {
     id: "intent",
-    name: "Intent Mapper",
+    name: "Action Planner",
     specialty: "mission + gestures",
     model: "vision",
-    prompt: "Analyze the mission, current mode, gestures, taps, swipes, shakes, and voice transcript. Infer what the user is trying to accomplish and propose the clearest next interaction."
+    prompt: "Analyze the mission, current mode, gestures, taps, swipes, shakes, voice transcript, and derived phone-state signals. Infer what the user is trying to accomplish and propose the clearest next physical action and in-app gesture."
   },
   {
     id: "safety",
@@ -58,6 +61,14 @@ const FALLBACK_MODELS = [
     }
   },
   {
+    id: "openai/whisper-large-v3",
+    name: "OpenAI: Whisper Large V3",
+    architecture: {
+      input_modalities: ["audio"],
+      output_modalities: ["text"]
+    }
+  },
+  {
     id: "mistralai/voxtral-small-24b-2507",
     name: "Mistral: Voxtral Small 24B 2507",
     architecture: {
@@ -71,17 +82,23 @@ const state = {
   apiKey: "",
   keyValidated: false,
   vlmModel: "google/gemini-2.5-flash",
-  sttModel: "openai/whisper-1",
+  sttModel: "openai/whisper-large-v3",
   audioModel: "google/gemini-2.5-flash",
   audioVoiceModel: "",
   mode: "guide",
   videoStream: null,
   audioStream: null,
+  audioContext: null,
+  micMeterConnected: false,
   mediaRecorder: null,
+  pcmRecorder: null,
   audioChunks: [],
   lastAudioBlob: null,
   lastAudioBase64: "",
+  lastAudioFormat: "",
+  lastAudioMime: "",
   lastAudioAt: 0,
+  lastFrameBytes: 0,
   transcript: "",
   micLevel: 0,
   location: null,
@@ -111,6 +128,7 @@ const els = {};
 function bindElements() {
   [
     "authGate",
+    "authForm",
     "appShell",
     "gateApiKeyInput",
     "validateKeyBtn",
@@ -177,6 +195,10 @@ function restoreSettings() {
   state.keyValidated = false;
   state.vlmModel = sessionStorage.getItem("openrouter-vlm-model") || state.vlmModel;
   state.sttModel = sessionStorage.getItem("openrouter-stt-model") || state.sttModel;
+  if (state.sttModel === "openai/whisper-1") {
+    state.sttModel = "openai/whisper-large-v3";
+    sessionStorage.setItem("openrouter-stt-model", state.sttModel);
+  }
   state.audioModel = sessionStorage.getItem("openrouter-audio-model") || state.audioModel;
   state.audioVoiceModel = sessionStorage.getItem("openrouter-audio-voice-model") || state.audioVoiceModel;
   els.vlmModelInput.value = state.vlmModel;
@@ -186,9 +208,9 @@ function restoreSettings() {
 }
 
 function wireEvents() {
-  els.validateKeyBtn.addEventListener("click", validateAndUnlock);
-  els.gateApiKeyInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") validateAndUnlock();
+  els.authForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    validateAndUnlock();
   });
   els.gateApiKeyInput.addEventListener("input", () => {
     setAuthError("");
@@ -209,7 +231,7 @@ function wireEvents() {
     renderCapabilities();
   });
   els.sttModelInput.addEventListener("change", (event) => {
-    state.sttModel = event.target.value.trim() || "openai/whisper-1";
+    state.sttModel = event.target.value.trim() || "openai/whisper-large-v3";
     sessionStorage.setItem("openrouter-stt-model", state.sttModel);
     renderCapabilities();
   });
@@ -292,7 +314,7 @@ async function validateAndUnlock() {
 }
 
 async function validateOpenRouterKey(apiKey) {
-  const response = await fetch(`${OPENROUTER_BASE}/key`, {
+  const response = await fetchWithTimeout(`${OPENROUTER_BASE}/key`, {
     headers: {
       "Authorization": `Bearer ${apiKey}`,
       "Accept": "application/json",
@@ -415,10 +437,7 @@ function populateModelSelectors() {
     inputAny: ["image"],
     outputAny: ["text"]
   });
-  const speechModels = filterModels({
-    inputAny: ["audio"],
-    outputAny: ["text"]
-  });
+  const speechModels = state.modelCatalog.filter(isSpeechToTextModel);
   const audioReasoningModels = filterModels({
     inputAny: ["audio"],
     outputAny: ["text"]
@@ -433,8 +452,8 @@ function populateModelSelectors() {
   populateModelSelect(els.sttModelInput, speechModels, state.sttModel, {
     pinnedModels: [
       {
-        id: "openai/whisper-1",
-        name: "OpenAI: Whisper 1",
+        id: "openai/whisper-large-v3",
+        name: "OpenAI: Whisper Large V3",
         architecture: { input_modalities: ["audio"], output_modalities: ["text"] }
       },
       modelById(state.sttModel)
@@ -457,6 +476,16 @@ function filterModels({ inputAny = [], outputAny = [] }) {
     const outputMatches = !outputAny.length || outputAny.some((modality) => outputs.includes(modality));
     return inputMatches && outputMatches;
   });
+}
+
+function isSpeechToTextModel(model) {
+  const inputs = model.architecture.input_modalities || [];
+  const outputs = model.architecture.output_modalities || [];
+  const label = `${model.id} ${model.name || ""}`.toLowerCase();
+  return inputs.includes("audio") && (
+    outputs.includes("transcription")
+    || /\b(whisper|transcribe|transcription|asr|chirp|parakeet)\b/.test(label)
+  );
 }
 
 function populateModelSelect(select, models, currentValue, options = {}) {
@@ -653,22 +682,41 @@ async function startMicrophone() {
 }
 
 function connectMicMeter(stream) {
-  const AudioContext = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContext) return;
-  const audioContext = new AudioContext();
+  if (state.micMeterConnected) return;
+  const audioContext = ensureAudioContext();
+  if (!audioContext) return;
   const source = audioContext.createMediaStreamSource(stream);
   const analyser = audioContext.createAnalyser();
   analyser.fftSize = 256;
   source.connect(analyser);
   const data = new Uint8Array(analyser.frequencyBinCount);
   const tick = () => {
+    if (!state.audioStream) return;
     analyser.getByteFrequencyData(data);
     const sum = data.reduce((total, value) => total + value, 0);
     state.micLevel = Math.round(sum / data.length);
     renderMetrics();
     requestAnimationFrame(tick);
   };
+  state.micMeterConnected = true;
   tick();
+}
+
+function ensureAudioContext() {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return null;
+  if (!state.audioContext || state.audioContext.state === "closed") {
+    state.audioContext = new AudioContext();
+  }
+  return state.audioContext;
+}
+
+async function resumeAudioContext() {
+  const audioContext = ensureAudioContext();
+  if (audioContext?.state === "suspended") {
+    await audioContext.resume();
+  }
+  return audioContext;
 }
 
 async function startLocation() {
@@ -811,7 +859,7 @@ function tryStartSpeechRecognition() {
 }
 
 async function toggleRecording() {
-  if (state.mediaRecorder?.state === "recording") {
+  if (state.pcmRecorder || state.mediaRecorder?.state === "recording") {
     stopRecording();
     return;
   }
@@ -822,12 +870,74 @@ async function startRecording(autoStopMs = 7000) {
   if (!state.audioStream) {
     await startMicrophone();
   }
-  if (!state.audioStream || !window.MediaRecorder) {
-    addEvent("record", "MediaRecorder unavailable");
+  if (!state.audioStream) {
+    addEvent("record", "Microphone recording unavailable");
     return null;
   }
   state.audioChunks = [];
   state.lastAudioBase64 = "";
+  state.lastAudioFormat = "";
+  state.lastAudioMime = "";
+  const audioContext = await resumeAudioContext();
+  if (audioContext?.createScriptProcessor) {
+    return startWavRecording(audioContext, autoStopMs);
+  }
+  if (!window.MediaRecorder) {
+    addEvent("record", "MediaRecorder unavailable");
+    return null;
+  }
+  return startMediaRecorderRecording(autoStopMs);
+}
+
+async function startWavRecording(audioContext, autoStopMs = 7000) {
+  if (state.pcmRecorder) {
+    stopRecording();
+  }
+  const source = audioContext.createMediaStreamSource(state.audioStream);
+  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+  const chunks = [];
+  processor.onaudioprocess = (event) => {
+    chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    event.outputBuffer.getChannelData(0).fill(0);
+  };
+  source.connect(processor);
+  processor.connect(audioContext.destination);
+  els.recordBtn.textContent = "Stop voice";
+  addEvent("record", "Recording WAV voice clip");
+
+  const completed = new Promise((resolve) => {
+    state.pcmRecorder = {
+      source,
+      processor,
+      chunks,
+      sampleRate: audioContext.sampleRate,
+      timeoutId: autoStopMs ? window.setTimeout(stopRecording, autoStopMs) : 0,
+      resolve
+    };
+  });
+  return completed;
+}
+
+function finishWavRecording() {
+  const recorder = state.pcmRecorder;
+  if (!recorder) return;
+  if (recorder.timeoutId) window.clearTimeout(recorder.timeoutId);
+  recorder.processor.disconnect();
+  recorder.source.disconnect();
+  recorder.processor.onaudioprocess = null;
+  const blob = encodeWavBlob(recorder.chunks, recorder.sampleRate);
+  state.lastAudioBlob = blob;
+  state.lastAudioAt = Date.now();
+  state.lastAudioFormat = "wav";
+  state.lastAudioMime = blob.type;
+  els.recordBtn.textContent = "Voice";
+  addEvent("record", `${Math.round(blob.size / 1024)} KB WAV voice clip captured`);
+  renderMetrics();
+  recorder.resolve(blob);
+  state.pcmRecorder = null;
+}
+
+function startMediaRecorderRecording(autoStopMs = 7000) {
   const mimeType = preferredAudioMimeType();
   const options = mimeType ? { mimeType } : undefined;
   state.mediaRecorder = new MediaRecorder(state.audioStream, options);
@@ -839,8 +949,10 @@ async function startRecording(autoStopMs = 7000) {
       const type = state.audioChunks[0]?.type || mimeType || "audio/webm";
       state.lastAudioBlob = new Blob(state.audioChunks, { type });
       state.lastAudioAt = Date.now();
-      els.recordBtn.textContent = "Record voice";
-      addEvent("record", `${Math.round(state.lastAudioBlob.size / 1024)} KB voice clip captured`);
+      state.lastAudioFormat = audioFormat(type);
+      state.lastAudioMime = type;
+      els.recordBtn.textContent = "Voice";
+      addEvent("record", `${Math.round(state.lastAudioBlob.size / 1024)} KB ${state.lastAudioFormat} voice clip captured`);
       renderMetrics();
       resolve(state.lastAudioBlob);
     };
@@ -857,6 +969,10 @@ async function startRecording(autoStopMs = 7000) {
 }
 
 function stopRecording() {
+  if (state.pcmRecorder) {
+    finishWavRecording();
+    return;
+  }
   if (state.mediaRecorder?.state === "recording") {
     state.mediaRecorder.stop();
   }
@@ -908,6 +1024,8 @@ async function runFusion() {
     let audioInsight = "";
     if (state.apiKey && state.lastAudioBlob) {
       state.lastAudioBase64 = await blobToBase64Payload(state.lastAudioBlob);
+      state.lastAudioFormat = state.lastAudioFormat || audioFormat(state.lastAudioBlob.type);
+      state.lastAudioMime = state.lastAudioMime || state.lastAudioBlob.type;
       try {
         const sttText = await transcribeAudio(state.lastAudioBlob);
         if (sttText) {
@@ -923,7 +1041,13 @@ async function runFusion() {
 
     const context = collectContext(transcript, !!frame, audioInsight);
     const agentReports = await runAgentCouncil(context, frame, state.lastAudioBlob);
-    const modelResult = await askCoordinator(context, agentReports);
+    let modelResult = "";
+    try {
+      modelResult = await askCoordinator(context, agentReports);
+    } catch (error) {
+      addEvent("coordinator", cleanError(error));
+      modelResult = makeCoordinatorFallback(context, agentReports, error);
+    }
     const result = formatOpenRouterResult(context, agentReports, modelResult);
 
     state.latestResult = result;
@@ -947,24 +1071,31 @@ function captureFrame() {
   if (!state.videoStream || !els.cameraPreview.videoWidth) return "";
   const canvas = els.snapshotCanvas;
   const video = els.cameraPreview;
-  const maxSide = 960;
+  const maxSide = 768;
   const scale = Math.min(maxSide / video.videoWidth, maxSide / video.videoHeight, 1);
   canvas.width = Math.round(video.videoWidth * scale);
   canvas.height = Math.round(video.videoHeight * scale);
   const context = canvas.getContext("2d");
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
   addEvent("camera", `${canvas.width}x${canvas.height} frame captured`);
-  return canvas.toDataURL("image/jpeg", 0.78);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+  state.lastFrameBytes = Math.round(((dataUrl.split(",")[1] || "").length) * 0.75);
+  return dataUrl;
 }
 
 async function transcribeAudio(blob) {
+  const format = state.lastAudioFormat || audioFormat(blob.type);
+  if (!SAFE_AUDIO_FORMATS.has(format)) {
+    throw new Error(`Speech skipped: ${format} audio is not a safe OpenRouter STT format`);
+  }
   const base64 = await blobToBase64Payload(blob);
   const response = await openRouterFetch("/audio/transcriptions", {
     model: state.sttModel,
     input_audio: {
       data: base64,
-      format: audioFormat(blob.type)
-    }
+      format
+    },
+    language: "en"
   });
   return response.text || "";
 }
@@ -995,7 +1126,7 @@ async function analyzeAudioWithModel(blob, transcript) {
             type: "input_audio",
             input_audio: {
               data: base64,
-              format: audioFormat(blob.type)
+              format: state.lastAudioFormat || audioFormat(blob.type)
             }
           }
         ]
@@ -1011,30 +1142,42 @@ async function runAgentCouncil(context, frameDataUrl, audioBlob) {
   resetAgents("queued");
   showPanel("agents", true);
   renderResult("### Agent council running\nSpecialist agents are analyzing the phone sensor payload now.");
-  const reports = await Promise.all(AGENTS.map((agent) => runAgent(agent, context, frameDataUrl, audioBlob)
-    .then((report) => {
-      state.agentStatus[agent.id] = { status: "done", text: compactAgentText(report.text) };
-      state.agentReports = [...state.agentReports.filter((item) => item.id !== report.id), report];
-      renderAgents();
-      return report;
-    })
-    .catch((error) => {
-      const report = {
-        id: agent.id,
-        name: agent.name,
-        specialty: agent.specialty,
-        model: agentModel(agent),
-        text: `Agent failed: ${cleanError(error)}`,
-        error: true
-      };
-      state.agentStatus[agent.id] = { status: "error", text: cleanError(error) };
-      state.agentReports = [...state.agentReports.filter((item) => item.id !== report.id), report];
-      renderAgents();
-      return report;
-    })));
+  const reports = new Array(AGENTS.length);
+  let nextIndex = 0;
+  const runNext = async () => {
+    while (nextIndex < AGENTS.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      reports[index] = await runAgentSafely(AGENTS[index], context, frameDataUrl, audioBlob);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(AGENT_CONCURRENCY, AGENTS.length) }, runNext));
   state.agentReports = reports;
   renderAgents();
   return reports;
+}
+
+async function runAgentSafely(agent, context, frameDataUrl, audioBlob) {
+  try {
+    const report = await runAgent(agent, context, frameDataUrl, audioBlob);
+    state.agentStatus[agent.id] = { status: "done", text: compactAgentText(report.text) };
+    state.agentReports = [...state.agentReports.filter((item) => item.id !== report.id), report];
+    renderAgents();
+    return report;
+  } catch (error) {
+    const report = {
+      id: agent.id,
+      name: agent.name,
+      specialty: agent.specialty,
+      model: agentModel(agent),
+      text: `Agent failed: ${cleanError(error)}`,
+      error: true
+    };
+    state.agentStatus[agent.id] = { status: "error", text: cleanError(error) };
+    state.agentReports = [...state.agentReports.filter((item) => item.id !== report.id), report];
+    renderAgents();
+    return report;
+  }
 }
 
 async function runAgent(agent, context, frameDataUrl, audioBlob) {
@@ -1050,7 +1193,7 @@ async function runAgent(agent, context, frameDataUrl, audioBlob) {
         content: [
           `You are ${agent.name}, a specialist in ${agent.specialty}.`,
           "You are one agent in a phone-sensor AI council. Use only the provided phone sensor data, image, and audio.",
-          "Return concise Markdown with: Evidence, Interpretation, Next move. Be explicit about uncertainty."
+          "Return concise Markdown with: Evidence, Interpretation, Next move, Confidence. Tie claims to camera, audio, location, motion, orientation, gesture, or derived signals. Be explicit about uncertainty."
         ].join(" ")
       },
       {
@@ -1095,13 +1238,16 @@ function agentContent(agent, context, frameDataUrl, audioBlob) {
     });
   }
   if (agent.usesAudio && audioBlob && state.lastAudioBase64) {
-    content.push({
-      type: "input_audio",
-      input_audio: {
-        data: state.lastAudioBase64 || "",
-        format: audioFormat(audioBlob.type)
-      }
-    });
+    const format = state.lastAudioFormat || audioFormat(audioBlob.type);
+    if (SAFE_AUDIO_FORMATS.has(format)) {
+      content.push({
+        type: "input_audio",
+        input_audio: {
+          data: state.lastAudioBase64 || "",
+          format
+        }
+      });
+    }
   }
   return content;
 }
@@ -1116,7 +1262,7 @@ async function askCoordinator(context, agentReports) {
     messages: [
       {
         role: "system",
-        content: "You are Sensorium Coordinator. Fuse specialist agent reports and the original phone sensor payload into one useful phone-screen answer. Be specific about which agents and sensor signals affected the recommendation. Return concise Markdown with: Read, Agent consensus, Action, Next gesture."
+        content: "You are Sensorium Coordinator. Fuse specialist agent reports and the original phone sensor payload into one useful phone-screen answer. Be specific about which agents and sensor signals affected the recommendation. Return concise Markdown with: Read, Sensor evidence, Agent consensus, Phone action, Next gesture, Uncertainty. The Phone action should be something only this phone app could do with live sensors, such as point camera, move phone, listen again, share, speak, vibrate, or capture another angle."
       },
       {
         role: "user",
@@ -1136,6 +1282,27 @@ async function askCoordinator(context, agentReports) {
   return extractMessageText(data);
 }
 
+function makeCoordinatorFallback(context, agentReports, error) {
+  const usableReports = agentReports.filter((report) => !report.error);
+  const failedReports = agentReports.filter((report) => report.error);
+  return [
+    "### Read",
+    "The coordinator model failed, but the app preserved the specialist agent outputs instead of dropping the run.",
+    "",
+    "### Agent consensus",
+    usableReports.length
+      ? usableReports.map((report) => `- **${report.name}:** ${stripMarkdown(report.text).slice(0, 240)}`).join("\n")
+      : "- No specialist agent completed successfully.",
+    "",
+    "### Action",
+    `Try again with ${context.camera.frameIncluded ? "the camera frame" : "camera enabled"}, ${context.microphone.active ? "a fresh voice clip" : "microphone enabled"}, and the phone held still for two seconds. The current derived state is ${context.derived.movementState} / ${context.derived.phonePose}.`,
+    "",
+    "### Debug",
+    `Coordinator error: ${cleanError(error)}`,
+    failedReports.length ? `Failed agents: ${failedReports.map((report) => report.name).join(", ")}` : "Failed agents: none"
+  ].join("\n");
+}
+
 function extractMessageText(data) {
   const message = data.choices?.[0]?.message;
   if (!message) throw new Error("OpenRouter returned no message");
@@ -1147,7 +1314,7 @@ function extractMessageText(data) {
 }
 
 async function openRouterFetch(path, body) {
-  const response = await fetch(`${OPENROUTER_BASE}${path}`, {
+  const response = await fetchWithTimeout(`${OPENROUTER_BASE}${path}`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${state.apiKey}`,
@@ -1157,11 +1324,42 @@ async function openRouterFetch(path, body) {
     },
     body: JSON.stringify(body)
   });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`${response.status} ${text.slice(0, 500)}`);
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
   }
-  return response.json();
+  if (!response.ok) {
+    throw new Error(formatOpenRouterRequestError(path, response, payload, text, body?.model));
+  }
+  return payload || {};
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = OPENROUTER_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`OpenRouter request timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function formatOpenRouterRequestError(path, response, payload, rawText, model) {
+  const detail = payload?.error?.message
+    || payload?.message
+    || rawText
+    || response.statusText
+    || "request failed";
+  const modelText = model ? ` for ${model}` : "";
+  return `${response.status} ${path}${modelText}: ${String(detail).slice(0, 700)}`;
 }
 
 function buildPrompt(context) {
@@ -1183,7 +1381,8 @@ function formatOpenRouterResult(context, agentReports, modelResult) {
     context.location ? `location +/- ${context.location.accuracy}m` : "no location",
     context.motion ? `motion ${context.motion.magnitude} m/s2` : "no motion",
     context.orientation ? "orientation" : "no orientation",
-    context.gestures.length ? `${context.gestures.length} gestures` : "no gestures"
+    context.gestures.length ? `${context.gestures.length} gestures` : "no gestures",
+    `derived ${context.derived.movementState} / ${context.derived.phonePose}`
   ];
 
   return [
@@ -1191,6 +1390,7 @@ function formatOpenRouterResult(context, agentReports, modelResult) {
     `Mission: ${context.userMission || "No mission text provided."}`,
     `Models: coordinator \`${state.vlmModel}\`, speech \`${state.sttModel}\`, audio \`${state.audioModel}\`.`,
     `Sensor payload: ${sensors.join(", ")}.`,
+    `Payload sizes: image ${Math.round(context.payload.imageBytes / 1024)} KB, audio ${Math.round(context.microphone.audioBytes / 1024)} KB, sensor JSON ${context.payload.sensorJsonBytes} bytes.`,
     `Agents: ${agentReports.map((report) => `${report.name} (${report.model})`).join(", ")}.`,
     "",
     "### Model result",
@@ -1219,12 +1419,30 @@ function collectContext(transcript, frameIncluded, audioInsight = "") {
       transcript: transcript || "",
       audioModel: state.audioModel,
       audioModelInsight: audioInsight,
+      audioFormat: state.lastAudioFormat || null,
+      audioMime: state.lastAudioMime || null,
+      audioBytes: state.lastAudioBlob?.size || 0,
       lastClipAgeSeconds: state.lastAudioAt ? Math.round((Date.now() - state.lastAudioAt) / 1000) : null
     },
     location: state.location,
     motion: state.motion,
     orientation: state.orientation,
     gestures: state.gestures.slice(-12),
+    derived: derivePhoneState(),
+    timeline: state.events.slice(0, 10).map((event) => ({
+      type: event.type,
+      text: event.text,
+      secondsAgo: Math.round((Date.now() - event.at.getTime()) / 1000)
+    })),
+    payload: {
+      imageBytes: frameIncluded ? estimateImageBytes() : 0,
+      sensorJsonBytes: estimateJsonBytes({
+        location: state.location,
+        motion: state.motion,
+        orientation: state.orientation,
+        gestures: state.gestures.slice(-12)
+      })
+    },
     device: {
       viewport: `${window.innerWidth}x${window.innerHeight}`,
       screen: `${screen.width}x${screen.height}`,
@@ -1243,6 +1461,72 @@ function collectContext(transcript, frameIncluded, audioInsight = "") {
       wakeLock: !!state.wakeLock
     }
   };
+}
+
+function derivePhoneState() {
+  const latestGesture = state.gestures.at(-1);
+  const magnitude = state.motion?.magnitude || 0;
+  const beta = state.orientation?.beta;
+  const gamma = state.orientation?.gamma;
+  let movementState = "unknown";
+  if (magnitude > 24) {
+    movementState = "shake or impact";
+  } else if (magnitude > 13) {
+    movementState = "moving";
+  } else if (state.motion) {
+    movementState = "steady";
+  }
+
+  let phonePose = "unknown";
+  if (typeof beta === "number" && typeof gamma === "number") {
+    if (Math.abs(beta) < 25 && Math.abs(gamma) < 25) {
+      phonePose = "flat or table-facing";
+    } else if (Math.abs(gamma) > 55) {
+      phonePose = gamma > 0 ? "tilted right" : "tilted left";
+    } else if (beta > 35) {
+      phonePose = "upright toward user";
+    } else if (beta < -35) {
+      phonePose = "tilted away";
+    } else {
+      phonePose = "handheld";
+    }
+  }
+
+  const locationQuality = state.location
+    ? state.location.accuracy <= 25 ? "precise" : state.location.accuracy <= 100 ? "approximate" : "coarse"
+    : "missing";
+  const audioQuality = state.audioStream
+    ? state.micLevel > 18 ? "active sound" : state.micLevel > 5 ? "quiet sound" : "very quiet"
+    : "missing";
+  return {
+    movementState,
+    phonePose,
+    locationQuality,
+    audioQuality,
+    lastGesture: latestGesture || null,
+    completeness: sensorCompleteness()
+  };
+}
+
+function sensorCompleteness() {
+  const checks = [
+    !!state.videoStream,
+    !!state.audioStream,
+    !!state.location,
+    !!state.motion,
+    !!state.orientation,
+    !!state.gestures.length,
+    !!state.battery
+  ];
+  return `${checks.filter(Boolean).length}/${checks.length}`;
+}
+
+function estimateImageBytes() {
+  return state.lastFrameBytes || 0;
+}
+
+function estimateJsonBytes(value) {
+  return new Blob([JSON.stringify(value)]).size;
 }
 
 function makeLocalFusion(context) {
@@ -1573,6 +1857,72 @@ function blobToBase64Payload(blob) {
     reader.onerror = () => reject(reader.error || new Error("Unable to read audio blob"));
     reader.readAsDataURL(blob);
   });
+}
+
+function encodeWavBlob(chunks, sourceRate) {
+  const samples = mergeFloatChunks(chunks);
+  const targetRate = Math.min(sourceRate, 16000);
+  const downsampled = sourceRate === targetRate ? samples : downsample(samples, sourceRate, targetRate);
+  const dataSize = downsampled.length * 2;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, targetRate, true);
+  view.setUint32(28, targetRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (const sample of downsampled) {
+    const clipped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(offset, clipped < 0 ? clipped * 0x8000 : clipped * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([view], { type: "audio/wav" });
+}
+
+function mergeFloatChunks(chunks) {
+  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const merged = new Float32Array(length);
+  let offset = 0;
+  chunks.forEach((chunk) => {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  });
+  return merged;
+}
+
+function downsample(samples, sourceRate, targetRate) {
+  if (targetRate >= sourceRate) return samples;
+  const ratio = sourceRate / targetRate;
+  const length = Math.floor(samples.length / ratio);
+  const result = new Float32Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const start = Math.floor(index * ratio);
+    const end = Math.floor((index + 1) * ratio);
+    let total = 0;
+    let count = 0;
+    for (let inputIndex = start; inputIndex < end && inputIndex < samples.length; inputIndex += 1) {
+      total += samples[inputIndex];
+      count += 1;
+    }
+    result[index] = count ? total / count : 0;
+  }
+  return result;
+}
+
+function writeAscii(view, offset, text) {
+  for (let index = 0; index < text.length; index += 1) {
+    view.setUint8(offset + index, text.charCodeAt(index));
+  }
 }
 
 function audioFormat(mimeType) {
