@@ -102,10 +102,18 @@ const state = {
   transcript: "",
   micLevel: 0,
   location: null,
+  locationWatchId: null,
   orientation: null,
+  orientationHandler: null,
   motion: null,
+  motionHandler: null,
   battery: null,
+  batteryManager: null,
+  batteryUpdateHandler: null,
   wakeLock: null,
+  sensorsStarted: false,
+  recognition: null,
+  recognitionStarted: false,
   gestures: [],
   events: [],
   activePointers: new Map(),
@@ -215,7 +223,7 @@ function wireEvents() {
   els.gateApiKeyInput.addEventListener("input", () => {
     setAuthError("");
   });
-  els.armBtn.addEventListener("click", primeSensors);
+  els.armBtn.addEventListener("click", toggleSensors);
   els.analyzeBtn.addEventListener("click", runFusion);
   els.recordBtn.addEventListener("click", toggleRecording);
   els.fullscreenBtn.addEventListener("click", toggleFullscreen);
@@ -631,6 +639,14 @@ function screenZone(x, y) {
   return `${vertical} ${horizontal}`;
 }
 
+async function toggleSensors() {
+  if (hasActiveSensors()) {
+    await stopSensors();
+  } else {
+    await primeSensors();
+  }
+}
+
 async function primeSensors() {
   setBusy(true);
   addEvent("prime", "Requesting phone sensors");
@@ -643,7 +659,44 @@ async function primeSensors() {
     keepAwake()
   ]);
   tryStartSpeechRecognition();
+  state.sensorsStarted = hasActiveSensors();
+  addEvent("sensors", state.sensorsStarted ? "Phone sensors active" : "No phone sensors started");
   setBusy(false);
+  renderSensorButton();
+  renderCapabilities();
+  renderMetrics();
+}
+
+async function stopSensors() {
+  setBusy(true);
+  addEvent("sensors", "Stopping phone sensors");
+  stopRecording();
+  stopCamera();
+  await stopMicrophone();
+  stopLocation();
+  stopMotion();
+  stopBattery();
+  await stopWakeLock();
+  stopSpeechRecognition();
+  state.sensorsStarted = false;
+  state.transcript = "";
+  state.micLevel = 0;
+  state.location = null;
+  state.motion = null;
+  state.orientation = null;
+  state.lastFrameBytes = 0;
+  state.lastAudioBlob = null;
+  state.lastAudioBase64 = "";
+  state.lastAudioFormat = "";
+  state.lastAudioMime = "";
+  state.lastAudioAt = 0;
+  els.cameraPreview.srcObject = null;
+  els.cameraPreview.classList.remove("ready");
+  els.cameraEmpty.classList.remove("hidden");
+  els.recordBtn.textContent = "Voice";
+  addEvent("sensors", "Phone sensors stopped");
+  setBusy(false);
+  renderSensorButton();
   renderCapabilities();
   renderMetrics();
 }
@@ -666,6 +719,13 @@ async function startCamera() {
   addEvent("camera", "Rear camera stream active");
 }
 
+function stopCamera() {
+  if (!state.videoStream) return;
+  state.videoStream.getTracks().forEach((track) => track.stop());
+  state.videoStream = null;
+  addEvent("camera", "Camera stream stopped");
+}
+
 async function startMicrophone() {
   if (!state.supported.microphone || state.audioStream) return;
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -679,6 +739,23 @@ async function startMicrophone() {
   state.audioStream = stream;
   connectMicMeter(stream);
   addEvent("mic", "Microphone stream active");
+}
+
+async function stopMicrophone() {
+  if (state.audioStream) {
+    state.audioStream.getTracks().forEach((track) => track.stop());
+    state.audioStream = null;
+    addEvent("mic", "Microphone stream stopped");
+  }
+  state.micMeterConnected = false;
+  if (state.audioContext && state.audioContext.state !== "closed") {
+    try {
+      await state.audioContext.close();
+    } catch (error) {
+      addEvent("mic", error.message || "Audio context close failed");
+    }
+  }
+  state.audioContext = null;
 }
 
 function connectMicMeter(stream) {
@@ -741,12 +818,23 @@ async function startLocation() {
   addEvent("location", "Location watch requested");
 }
 
+function stopLocation() {
+  if (state.locationWatchId === null) return;
+  navigator.geolocation.clearWatch(state.locationWatchId);
+  state.locationWatchId = null;
+  addEvent("location", "Location watch stopped");
+}
+
 async function startMotion() {
-  const motionPermission = await requestSensorPermission(window.DeviceMotionEvent);
-  const orientationPermission = await requestSensorPermission(window.DeviceOrientationEvent);
+  const motionPermission = state.motionHandler
+    ? false
+    : await requestSensorPermission(window.DeviceMotionEvent);
+  const orientationPermission = state.orientationHandler
+    ? false
+    : await requestSensorPermission(window.DeviceOrientationEvent);
 
   if (motionPermission) {
-    window.addEventListener("devicemotion", (event) => {
+    state.motionHandler = (event) => {
       const source = event.accelerationIncludingGravity || event.acceleration;
       if (!source) return;
       const x = source.x || 0;
@@ -765,12 +853,13 @@ async function startMotion() {
         addGesture("shake", `${round(magnitude, 1)} m/s2`);
       }
       renderMetrics();
-    }, { passive: true });
+    };
+    window.addEventListener("devicemotion", state.motionHandler, { passive: true });
     addEvent("motion", "Motion sensor active");
   }
 
   if (orientationPermission) {
-    window.addEventListener("deviceorientation", (event) => {
+    state.orientationHandler = (event) => {
       state.orientation = {
         alpha: nullableRound(event.alpha, 1),
         beta: nullableRound(event.beta, 1),
@@ -778,8 +867,22 @@ async function startMotion() {
         absolute: !!event.absolute
       };
       renderMetrics();
-    }, { passive: true });
+    };
+    window.addEventListener("deviceorientation", state.orientationHandler, { passive: true });
     addEvent("tilt", "Orientation sensor active");
+  }
+}
+
+function stopMotion() {
+  if (state.motionHandler) {
+    window.removeEventListener("devicemotion", state.motionHandler);
+    state.motionHandler = null;
+    addEvent("motion", "Motion sensor stopped");
+  }
+  if (state.orientationHandler) {
+    window.removeEventListener("deviceorientation", state.orientationHandler);
+    state.orientationHandler = null;
+    addEvent("tilt", "Orientation sensor stopped");
   }
 }
 
@@ -797,7 +900,7 @@ async function requestSensorPermission(sensorEvent) {
 }
 
 async function startBattery() {
-  if (!state.supported.battery || state.battery) return;
+  if (!state.supported.battery || state.batteryManager) return;
   try {
     const battery = await navigator.getBattery();
     const update = () => {
@@ -807,12 +910,24 @@ async function startBattery() {
       };
       renderCapabilities();
     };
+    state.batteryManager = battery;
+    state.batteryUpdateHandler = update;
     battery.addEventListener("levelchange", update);
     battery.addEventListener("chargingchange", update);
     update();
   } catch (error) {
     addEvent("battery", error.message || "Battery unavailable");
   }
+}
+
+function stopBattery() {
+  if (!state.batteryManager || !state.batteryUpdateHandler) return;
+  state.batteryManager.removeEventListener("levelchange", state.batteryUpdateHandler);
+  state.batteryManager.removeEventListener("chargingchange", state.batteryUpdateHandler);
+  state.batteryManager = null;
+  state.batteryUpdateHandler = null;
+  state.battery = null;
+  addEvent("battery", "Battery monitor stopped");
 }
 
 async function keepAwake() {
@@ -822,6 +937,18 @@ async function keepAwake() {
     addEvent("screen", "Wake lock active");
   } catch (error) {
     addEvent("screen", error.message || "Wake lock unavailable");
+  }
+}
+
+async function stopWakeLock() {
+  if (!state.wakeLock) return;
+  const wakeLock = state.wakeLock;
+  state.wakeLock = null;
+  try {
+    await wakeLock.release();
+    addEvent("screen", "Wake lock released");
+  } catch (error) {
+    addEvent("screen", error.message || "Wake lock release failed");
   }
 }
 
@@ -856,6 +983,23 @@ function tryStartSpeechRecognition() {
   } catch (error) {
     addEvent("speech", error.message || "Speech recognition unavailable");
   }
+}
+
+function stopSpeechRecognition() {
+  state.recognitionStarted = false;
+  if (!state.recognition) return;
+  state.recognition.onend = null;
+  try {
+    if (typeof state.recognition.abort === "function") {
+      state.recognition.abort();
+    } else {
+      state.recognition.stop?.();
+    }
+    addEvent("speech", "Speech recognition stopped");
+  } catch (error) {
+    addEvent("speech", error.message || "Speech recognition stop failed");
+  }
+  state.recognition = null;
 }
 
 async function toggleRecording() {
@@ -1010,6 +1154,8 @@ async function runFusion() {
       keepAwake()
     ]);
     tryStartSpeechRecognition();
+    state.sensorsStarted = hasActiveSensors();
+    renderSensorButton();
 
     const frame = captureFrame();
     let transcript = state.transcript;
@@ -1596,6 +1742,26 @@ function renderCapabilities() {
   )).join("");
 }
 
+function hasActiveSensors() {
+  return !!(
+    state.videoStream
+    || state.audioStream
+    || state.locationWatchId !== null
+    || state.motionHandler
+    || state.orientationHandler
+    || state.batteryManager
+    || state.wakeLock
+    || state.recognitionStarted
+  );
+}
+
+function renderSensorButton() {
+  const active = hasActiveSensors();
+  state.sensorsStarted = active;
+  els.armBtn.textContent = active ? "Stop sensors" : "Start sensors";
+  els.armBtn.setAttribute("aria-pressed", String(active));
+}
+
 function renderAgents() {
   if (!els.agentGrid) return;
   const doneCount = AGENTS.filter((agent) => state.agentStatus[agent.id]?.status === "done").length;
@@ -1990,6 +2156,7 @@ function init() {
   renderCapabilities();
   renderMetrics();
   renderEvents();
+  renderSensorButton();
   registerServiceWorker();
   loadOpenRouterModels();
   addEvent("ready", window.isSecureContext ? "Secure browser context" : "Use HTTPS for phone sensors");
